@@ -1,0 +1,18 @@
+name: Turn Off DailyAna
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: write
+
+jobs:
+  turn-off:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Disable scheduled crawler
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow disable crawler.yml --repo "${{ github.repository }}"
+          echo "DailyAna scheduled crawler has been turned off."
