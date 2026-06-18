@@ -95,6 +95,7 @@ def _word_matches(word_config: Union[str, Dict], title_lower: str) -> bool:
 
 def load_frequency_words(
     frequency_file: Optional[str] = None,
+    selected_group_names: Optional[List[str]] = None,
 ) -> Tuple[List[Dict], List[str], List[str]]:
     """
     加载频率词配置
@@ -239,6 +240,13 @@ def load_frequency_words(
                     "max_count": group_max_count,
                 }
             )
+
+    if selected_group_names:
+        selected = {str(name).strip() for name in selected_group_names if str(name).strip()}
+        processed_groups = [
+            group for group in processed_groups
+            if str(group.get("display_name") or "").strip() in selected
+        ]
 
     return processed_groups, filter_words, global_filters
 
