@@ -27,8 +27,14 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = ROOT / "config" / "config.yaml"
 KEYWORDS_PATH = ROOT / "config" / "frequency_words.txt"
+CATEGORIES_PATH = ROOT / "config" / "content_categories.yaml"
 PROFILE_DIR = ROOT / "config" / "profiles"
 PROFILE_NAMES = ("work", "relax")
+CATEGORY_DEFAULTS = {
+    "frontier": {"name": "前沿", "description": "AI、数据、科技、产业与前沿公司"},
+    "leisure": {"name": "休闲", "description": "游戏、影视、泛娱乐与轻内容"},
+    "current_events": {"name": "时事", "description": "国内外公共事件、宏观动态与综合新闻"},
+}
 
 
 def read_yaml(path: Path) -> dict:
@@ -64,6 +70,75 @@ def save_profile(name: str, data: dict) -> None:
     if name not in PROFILE_NAMES:
         raise ValueError("unknown profile")
     write_yaml(PROFILE_DIR / f"{name}.yaml", data)
+
+
+def default_categories_payload() -> dict:
+    return {
+        "categories": {
+            key: {
+                "name": value["name"],
+                "description": value["description"],
+                "platforms": [],
+                "rss_feeds": [],
+                "keyword_groups": [],
+            }
+            for key, value in CATEGORY_DEFAULTS.items()
+        }
+    }
+
+
+def load_categories() -> dict:
+    data = read_yaml(CATEGORIES_PATH) if CATEGORIES_PATH.exists() else default_categories_payload()
+    categories = data.setdefault("categories", {})
+    for key, value in CATEGORY_DEFAULTS.items():
+        categories.setdefault(key, {})
+        categories[key].setdefault("name", value["name"])
+        categories[key].setdefault("description", value["description"])
+        categories[key].setdefault("platforms", [])
+        categories[key].setdefault("rss_feeds", [])
+        categories[key].setdefault("keyword_groups", [])
+    return data
+
+
+def save_categories(data: dict) -> None:
+    write_yaml(CATEGORIES_PATH, data)
+
+
+def category_keys() -> list[str]:
+    return list((load_categories().get("categories") or {}).keys())
+
+
+def normalize_categories(values) -> list[str]:
+    valid = set(category_keys())
+    if not isinstance(values, list):
+        values = []
+    return [x for x in values if x in valid]
+
+
+def set_item_categories(member_key: str, item_id: str, categories: list[str]) -> None:
+    data = load_categories()
+    selected = set(normalize_categories(categories))
+    for key, category in data.get("categories", {}).items():
+        members = [x for x in (category.get(member_key) or []) if x != item_id]
+        if key in selected:
+            members.append(item_id)
+        category[member_key] = sorted(dict.fromkeys(members))
+    save_categories(data)
+
+
+def remove_item_from_categories(member_key: str, item_id: str) -> None:
+    data = load_categories()
+    for category in data.get("categories", {}).values():
+        category[member_key] = [x for x in (category.get(member_key) or []) if x != item_id]
+    save_categories(data)
+
+
+def item_categories(member_key: str, item_id: str) -> list[str]:
+    data = load_categories()
+    return [
+        key for key, category in data.get("categories", {}).items()
+        if item_id in (category.get(member_key) or [])
+    ]
 
 
 def load_keywords_text() -> str:
@@ -157,32 +232,45 @@ def get_keyword_groups() -> list[dict]:
     return [b for b in blocks if b["type"] == "group"]
 
 
-def upsert_keyword(block_id: int | None, text: str) -> dict:
+def upsert_keyword(block_id: int | None, text: str, categories: list[str] | None = None) -> dict:
     clean = text.strip()
     if not clean:
         raise ValueError("keyword block cannot be empty")
     preamble, blocks = split_keyword_blocks()
+    old_title = None
+    new_title = make_keyword_block(block_id or len(blocks), clean)["title"]
     if block_id is None:
         blocks.append(make_keyword_block(len(blocks), clean))
     else:
         found = False
         for i, block in enumerate(blocks):
             if block["id"] == block_id and block["type"] == "group":
+                old_title = block["title"]
                 blocks[i] = make_keyword_block(block_id, clean)
                 found = True
                 break
         if not found:
             raise ValueError("keyword block not found")
     write_keyword_blocks(preamble, blocks)
+    if old_title and old_title != new_title:
+        remove_item_from_categories("keyword_groups", old_title)
+    if categories is not None:
+        set_item_categories("keyword_groups", new_title, categories)
     return {"groups": get_keyword_groups()}
 
 
 def delete_keyword(block_id: int) -> dict:
     preamble, blocks = split_keyword_blocks()
+    removed_titles = [
+        b["title"] for b in blocks
+        if b["id"] == block_id and b["type"] == "group"
+    ]
     blocks = [b for b in blocks if not (b["id"] == block_id and b["type"] == "group")]
     for i, block in enumerate(blocks):
         block["id"] = i
     write_keyword_blocks(preamble, blocks)
+    for title in removed_titles:
+        remove_item_from_categories("keyword_groups", title)
     return {"groups": get_keyword_groups()}
 
 
@@ -255,6 +343,12 @@ def save_profile_settings(data: dict) -> dict:
     current = load_profile(profile)
     current.setdefault("display", {})
     current.setdefault("ai_analysis", {})
+    current.setdefault("content", {})
+
+    content = data.get("content", {})
+    if "selected_categories" in content:
+        selected = normalize_categories(content.get("selected_categories", []))
+        current["content"]["selected_categories"] = selected
 
     display = data.get("display", {})
     if "region_order" in display:
@@ -302,6 +396,7 @@ def state_payload() -> dict:
         "ai_analysis": config.get("ai_analysis", {}),
         "profiles": profiles,
         "effective_profiles": effective,
+        "content_categories": enrich_categories(load_categories().get("categories", {})),
         "keywords": get_keyword_groups(),
         "global_filters": get_global_filters(),
         "history": {
@@ -310,6 +405,18 @@ def state_payload() -> dict:
             "message": "数据库归档接口已预留，接入后可在这里搜索历史新闻。",
         },
     }
+
+
+def enrich_categories(categories: dict) -> dict:
+    platforms = {x.get("id"): x for x in read_yaml(CONFIG_PATH).get("platforms", {}).get("sources", [])}
+    feeds = {x.get("id"): x for x in read_yaml(CONFIG_PATH).get("rss", {}).get("feeds", [])}
+    keywords = {x["title"]: x for x in get_keyword_groups()}
+    enriched = deepcopy(categories or {})
+    for category in enriched.values():
+        category["platform_items"] = [platforms[x] for x in category.get("platforms", []) if x in platforms]
+        category["rss_items"] = [feeds[x] for x in category.get("rss_feeds", []) if x in feeds]
+        category["keyword_items"] = [keywords[x] for x in category.get("keyword_groups", []) if x in keywords]
+    return enriched
 
 
 HTML = r"""<!doctype html>
@@ -355,6 +462,14 @@ HTML = r"""<!doctype html>
     .profile-tabs { display:flex; gap:8px; margin-bottom:14px; }
     .profile-tabs button.active { background:var(--accent); color:white; border-color:var(--accent); }
     .toast { color:var(--ok); min-height:20px; }
+    details.category { background:var(--panel); border:1px solid var(--line); border-radius:8px; margin-bottom:12px; overflow:hidden; }
+    details.category summary { cursor:pointer; padding:13px 14px; font-weight:700; background:#f8fafc; }
+    details.category .category-body { padding:14px; display:grid; gap:14px; }
+    .mini-list { display:grid; gap:8px; }
+    .mini-item { border:1px solid var(--line); border-radius:8px; padding:8px 10px; background:#fff; }
+    .checks { display:flex; flex-wrap:wrap; gap:8px 14px; margin:8px 0 10px; }
+    .checks label { display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
+    .checks input { width:auto; }
     code { background:#eef2f7; padding:2px 5px; border-radius:5px; }
     @media (max-width: 760px) { main { grid-template-columns:1fr; } nav { display:flex; overflow:auto; border-right:0; border-bottom:1px solid var(--line); } nav button { white-space:nowrap; } .row,.row3 { grid-template-columns:1fr; } }
   </style>
@@ -368,6 +483,7 @@ HTML = r"""<!doctype html>
     <nav>
       <button class="active" data-tab="sources">信息源</button>
       <button data-tab="keywords">关键词</button>
+      <button data-tab="categories">内容分类</button>
       <button data-tab="profiles">推送方案</button>
       <button data-tab="history">历史新闻</button>
     </nav>
@@ -383,6 +499,8 @@ HTML = r"""<!doctype html>
           <h3>添加/编辑热榜源</h3>
           <div class="row"><input id="platId" placeholder="id，如 zhihu" /><input id="platName" placeholder="显示名" /></div>
           <div class="row"><input id="platDomain" placeholder="校验域名，如 zhihu.com" /><select id="platEnabled"><option value="true">启用</option><option value="false">禁用</option></select></div>
+          <div class="muted">所属内容分类</div>
+          <div id="platCategories" class="checks"></div>
           <p class="muted">id 相同会覆盖；删除会从 <code>platforms.sources</code> 移除。</p>
         </div>
         <div class="card">
@@ -390,6 +508,8 @@ HTML = r"""<!doctype html>
           <div class="row"><input id="rssId" placeholder="id，如 hacker-news" /><input id="rssName" placeholder="显示名" /></div>
           <input id="rssUrl" placeholder="RSS URL" style="margin-bottom:10px" />
           <div class="row"><input id="rssMaxAge" placeholder="max_age_days 可空" /><select id="rssEnabled"><option value="true">启用</option><option value="false">禁用</option></select></div>
+          <div class="muted">所属内容分类</div>
+          <div id="rssCategories" class="checks"></div>
         </div>
       </div>
       <h3>热榜平台</h3><div id="platformList" class="list"></div>
@@ -404,6 +524,8 @@ HTML = r"""<!doctype html>
       <div class="card" id="keywordEditor" style="display:none">
         <h3 id="keywordEditorTitle">关键词组</h3>
         <textarea id="keywordText" placeholder="[组名]\n关键词\n/正则/ => 别名"></textarea>
+        <div class="muted">所属内容分类</div>
+        <div id="keywordCategories" class="checks"></div>
         <div class="actions">
           <button class="primary" onclick="saveKeyword()">保存</button>
           <button class="ghost" onclick="closeKeywordEditor()">取消</button>
@@ -412,12 +534,24 @@ HTML = r"""<!doctype html>
       <div id="keywordList" class="list"></div>
     </section>
 
+    <section id="categories">
+      <div class="toolbar">
+        <input class="search" id="categorySearch" placeholder="搜索分类内的平台、RSS、关键词" />
+      </div>
+      <div id="categoryList"></div>
+    </section>
+
     <section id="profiles">
       <div class="profile-tabs">
         <button class="primary active" data-profile="work" onclick="selectProfile('work')">方案 1：工作内容</button>
         <button class="ghost" data-profile="relax" onclick="selectProfile('relax')">方案 2：休闲内容</button>
       </div>
       <div class="grid">
+        <div class="card">
+          <h3>本方案推送哪些分类</h3>
+          <div id="profileCategories" class="checks"></div>
+          <p class="muted">这里决定当前方案会启用哪些热榜源、RSS 源和关键词组。</p>
+        </div>
         <div class="card">
           <h3>推送显示区域</h3>
           <label class="check"><input type="checkbox" id="regHotlist" /> 热榜 hotlist</label>
@@ -481,10 +615,28 @@ HTML = r"""<!doctype html>
     function esc(v) {
       return String(v ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
     }
+    function categoryEntries() { return Object.entries(state.content_categories || {}); }
+    function itemCategories(memberKey, itemId) {
+      return categoryEntries()
+        .filter(([_, cat]) => (cat[memberKey] || []).includes(itemId))
+        .map(([key]) => key);
+    }
+    function renderCategoryChecks(containerId, inputName, selected=[]) {
+      const selectedSet = new Set(selected || []);
+      qs(containerId).innerHTML = categoryEntries().map(([key, cat]) => `
+        <label><input type="checkbox" name="${inputName}" value="${esc(key)}" ${selectedSet.has(key) ? 'checked' : ''} /> ${esc(cat.name || key)}</label>
+      `).join('');
+    }
+    function checkedCategories(inputName) {
+      return Array.from(document.querySelectorAll(`input[name="${inputName}"]:checked`)).map(x => x.value);
+    }
 
     async function load() {
       state = await api('/api/state');
-      renderSources(); renderKeywords(); renderProfile(); renderHistory();
+      renderCategoryChecks('platCategories', 'platCategory');
+      renderCategoryChecks('rssCategories', 'rssCategory');
+      renderCategoryChecks('keywordCategories', 'keywordCategory');
+      renderSources(); renderKeywords(); renderCategories(); renderProfile(); renderHistory();
     }
 
     document.querySelectorAll('nav button').forEach(btn => btn.addEventListener('click', () => {
@@ -494,6 +646,7 @@ HTML = r"""<!doctype html>
     }));
     qs('sourceSearch').addEventListener('input', renderSources);
     qs('keywordSearch').addEventListener('input', renderKeywords);
+    qs('categorySearch').addEventListener('input', renderCategories);
 
     function renderSources() {
       const q = qs('sourceSearch').value.toLowerCase();
@@ -510,12 +663,12 @@ HTML = r"""<!doctype html>
     }
     function editPlatformByIndex(idx){ editPlatform((state.platforms.sources || [])[idx]); }
     function editRssByIndex(idx){ editRss((state.rss.feeds || [])[idx]); }
-    function editPlatform(x){ qs('platId').value=x.id; qs('platName').value=x.name; qs('platDomain').value=x.expected_domain||''; qs('platEnabled').value=String(x.enabled!==false); }
-    function editRss(x){ qs('rssId').value=x.id; qs('rssName').value=x.name; qs('rssUrl').value=x.url; qs('rssEnabled').value=String(x.enabled!==false); qs('rssMaxAge').value=x.max_age_days ?? ''; }
-    async function savePlatform(){ state = await api('/api/platforms',{method:'POST',body:JSON.stringify({id:qs('platId').value,name:qs('platName').value,expected_domain:qs('platDomain').value,enabled:qs('platEnabled').value})}); renderSources(); toast('热榜源已保存'); }
-    async function saveRss(){ state = await api('/api/rss',{method:'POST',body:JSON.stringify({id:qs('rssId').value,name:qs('rssName').value,url:qs('rssUrl').value,enabled:qs('rssEnabled').value,max_age_days:qs('rssMaxAge').value})}); renderSources(); toast('RSS 源已保存'); }
-    async function deletePlatform(id){ if(confirm('删除热榜源 '+id+'?')){ state = await api('/api/platforms/'+encodeURIComponent(id),{method:'DELETE'}); renderSources(); } }
-    async function deleteRss(id){ if(confirm('删除 RSS 源 '+id+'?')){ state = await api('/api/rss/'+encodeURIComponent(id),{method:'DELETE'}); renderSources(); } }
+    function editPlatform(x){ qs('platId').value=x.id; qs('platName').value=x.name; qs('platDomain').value=x.expected_domain||''; qs('platEnabled').value=String(x.enabled!==false); renderCategoryChecks('platCategories', 'platCategory', itemCategories('platforms', x.id)); }
+    function editRss(x){ qs('rssId').value=x.id; qs('rssName').value=x.name; qs('rssUrl').value=x.url; qs('rssEnabled').value=String(x.enabled!==false); qs('rssMaxAge').value=x.max_age_days ?? ''; renderCategoryChecks('rssCategories', 'rssCategory', itemCategories('rss_feeds', x.id)); }
+    async function savePlatform(){ state = await api('/api/platforms',{method:'POST',body:JSON.stringify({id:qs('platId').value,name:qs('platName').value,expected_domain:qs('platDomain').value,enabled:qs('platEnabled').value,categories:checkedCategories('platCategory')})}); renderSources(); renderCategories(); toast('热榜源已保存'); }
+    async function saveRss(){ state = await api('/api/rss',{method:'POST',body:JSON.stringify({id:qs('rssId').value,name:qs('rssName').value,url:qs('rssUrl').value,enabled:qs('rssEnabled').value,max_age_days:qs('rssMaxAge').value,categories:checkedCategories('rssCategory')})}); renderSources(); renderCategories(); toast('RSS 源已保存'); }
+    async function deletePlatform(id){ if(confirm('删除热榜源 '+id+'?')){ state = await api('/api/platforms/'+encodeURIComponent(id),{method:'DELETE'}); renderSources(); renderCategories(); } }
+    async function deleteRss(id){ if(confirm('删除 RSS 源 '+id+'?')){ state = await api('/api/rss/'+encodeURIComponent(id),{method:'DELETE'}); renderSources(); renderCategories(); } }
 
     function renderKeywords() {
       const q = qs('keywordSearch').value.toLowerCase();
@@ -525,19 +678,44 @@ HTML = r"""<!doctype html>
         <div class="actions"><button class="ghost" onclick="editKeyword(${x.id})">编辑</button><button class="danger" onclick="deleteKeyword(${x.id})">删除</button></div></div>
       `).join('') + filterHtml;
     }
-    function newKeyword(){ editingKeywordId=null; qs('keywordEditorTitle').textContent='新增关键词组'; qs('keywordText').value='[新组名]\\n关键词'; qs('keywordEditor').style.display='block'; }
-    function editKeyword(id){ const item = (state.keywords || []).find(x => x.id === id); if (!item) return; editingKeywordId=id; qs('keywordEditorTitle').textContent='编辑关键词组'; qs('keywordText').value=item.text; qs('keywordEditor').style.display='block'; }
+    function newKeyword(){ editingKeywordId=null; qs('keywordEditorTitle').textContent='新增关键词组'; qs('keywordText').value='[新组名]\\n关键词'; renderCategoryChecks('keywordCategories', 'keywordCategory'); qs('keywordEditor').style.display='block'; }
+    function editKeyword(id){ const item = (state.keywords || []).find(x => x.id === id); if (!item) return; editingKeywordId=id; qs('keywordEditorTitle').textContent='编辑关键词组'; qs('keywordText').value=item.text; renderCategoryChecks('keywordCategories', 'keywordCategory', itemCategories('keyword_groups', item.title)); qs('keywordEditor').style.display='block'; }
     function closeKeywordEditor(){ qs('keywordEditor').style.display='none'; }
-    async function saveKeyword(){ const method = editingKeywordId === null ? 'POST':'PUT'; const path = editingKeywordId === null ? '/api/keywords':'/api/keywords/'+editingKeywordId; const data = await api(path,{method,body:JSON.stringify({text:qs('keywordText').value})}); state.keywords=data.groups; closeKeywordEditor(); renderKeywords(); toast('关键词已保存'); }
-    async function deleteKeyword(id){ if(confirm('删除这个关键词组?')){ const data = await api('/api/keywords/'+id,{method:'DELETE'}); state.keywords=data.groups; renderKeywords(); } }
+    async function saveKeyword(){ const method = editingKeywordId === null ? 'POST':'PUT'; const path = editingKeywordId === null ? '/api/keywords':'/api/keywords/'+editingKeywordId; const data = await api(path,{method,body:JSON.stringify({text:qs('keywordText').value,categories:checkedCategories('keywordCategory')})}); state = await api('/api/state'); closeKeywordEditor(); renderKeywords(); renderCategories(); toast('关键词已保存'); }
+    async function deleteKeyword(id){ if(confirm('删除这个关键词组?')){ const data = await api('/api/keywords/'+id,{method:'DELETE'}); state.keywords=data.groups; state = await api('/api/state'); renderKeywords(); renderCategories(); } }
+
+    function renderCategories() {
+      const q = qs('categorySearch').value.toLowerCase();
+      qs('categoryList').innerHTML = categoryEntries().map(([key, cat]) => {
+        const platforms = (cat.platform_items || []).filter(x => JSON.stringify(x).toLowerCase().includes(q));
+        const feeds = (cat.rss_items || []).filter(x => JSON.stringify(x).toLowerCase().includes(q));
+        const keywords = (cat.keyword_items || []).filter(x => (x.title + x.text).toLowerCase().includes(q));
+        return `
+          <details class="category" open>
+            <summary>${esc(cat.name || key)} <span class="muted">${esc(cat.description || '')}</span></summary>
+            <div class="category-body">
+              <div><h3>热榜平台</h3><div class="mini-list">${platforms.map(x=>`<div class="mini-item"><b>${esc(x.name)}</b> <span class="muted">${esc(x.id)}</span></div>`).join('') || '<p class="muted">无</p>'}</div></div>
+              <div><h3>RSS 源</h3><div class="mini-list">${feeds.map(x=>`<div class="mini-item"><b>${esc(x.name)}</b> <span class="muted">${esc(x.id)}</span></div>`).join('') || '<p class="muted">无</p>'}</div></div>
+              <div><h3>关键词组</h3><div class="mini-list">${keywords.map(x=>`<div class="mini-item"><b>${esc(x.title)}</b><pre>${esc(x.text)}</pre></div>`).join('') || '<p class="muted">无</p>'}</div></div>
+            </div>
+          </details>`;
+      }).join('');
+    }
 
     function selectProfile(name) {
       currentProfile = name;
-      document.querySelectorAll('[data-profile]').forEach(b=>b.classList.toggle('active', b.dataset.profile===name));
+      document.querySelectorAll('[data-profile]').forEach(b=>{
+        const active = b.dataset.profile===name;
+        b.classList.toggle('active', active);
+        b.classList.toggle('primary', active);
+        b.classList.toggle('ghost', !active);
+      });
       renderProfile();
     }
     function renderProfile() {
       const eff = state.effective_profiles[currentProfile] || {};
+      const rawProfile = state.profiles[currentProfile] || {};
+      renderCategoryChecks('profileCategories', 'profileCategory', (rawProfile.content || {}).selected_categories || []);
       const display = eff.display || {};
       const regions = display.regions || {};
       qs('regHotlist').checked = !!regions.hotlist;
@@ -565,6 +743,7 @@ HTML = r"""<!doctype html>
           regions: {hotlist:qs('regHotlist').checked,rss:qs('regRss').checked,ai_analysis:qs('regAi').checked,new_items:qs('regNew').checked,standalone:qs('regStandalone').checked},
           standalone: {platforms:csv(qs('standalonePlatforms').value), rss_feeds:csv(qs('standaloneRss').value), max_items:qs('standaloneMax').value}
         },
+        content: {selected_categories: checkedCategories('profileCategory')},
         ai_analysis: {enabled:qs('aiEnabled').checked, include_rss:qs('aiRss').checked, include_standalone:qs('aiStandalone').checked, include_rank_timeline:qs('aiTimeline').checked, max_news_for_analysis:qs('aiMaxNews').value}
       })});
       renderProfile(); toast('推送方案已保存');
@@ -629,11 +808,17 @@ class Handler(BaseHTTPRequestHandler):
         try:
             data = self.read_json()
             if parsed.path == "/api/platforms":
-                self.send_json(upsert_list_item("platforms", "sources", platform_payload(data)))
+                item = platform_payload(data)
+                upsert_list_item("platforms", "sources", item)
+                set_item_categories("platforms", item["id"], data.get("categories", []))
+                self.send_json(state_payload())
             elif parsed.path == "/api/rss":
-                self.send_json(upsert_list_item("rss", "feeds", rss_payload(data)))
+                item = rss_payload(data)
+                upsert_list_item("rss", "feeds", item)
+                set_item_categories("rss_feeds", item["id"], data.get("categories", []))
+                self.send_json(state_payload())
             elif parsed.path == "/api/keywords":
-                self.send_json(upsert_keyword(None, data.get("text", "")))
+                self.send_json(upsert_keyword(None, data.get("text", ""), data.get("categories", [])))
             else:
                 self.send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
         except Exception as exc:
@@ -647,7 +832,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(save_profile_settings(data))
             elif parsed.path.startswith("/api/keywords/"):
                 block_id = int(parsed.path.rsplit("/", 1)[1])
-                self.send_json(upsert_keyword(block_id, data.get("text", "")))
+                self.send_json(upsert_keyword(block_id, data.get("text", ""), data.get("categories", [])))
             else:
                 self.send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
         except Exception as exc:
@@ -658,10 +843,14 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if parsed.path.startswith("/api/platforms/"):
                 item_id = unquote(parsed.path.rsplit("/", 1)[1])
-                self.send_json(delete_list_item("platforms", "sources", item_id))
+                delete_list_item("platforms", "sources", item_id)
+                remove_item_from_categories("platforms", item_id)
+                self.send_json(state_payload())
             elif parsed.path.startswith("/api/rss/"):
                 item_id = unquote(parsed.path.rsplit("/", 1)[1])
-                self.send_json(delete_list_item("rss", "feeds", item_id))
+                delete_list_item("rss", "feeds", item_id)
+                remove_item_from_categories("rss_feeds", item_id)
+                self.send_json(state_payload())
             elif parsed.path.startswith("/api/keywords/"):
                 block_id = int(parsed.path.rsplit("/", 1)[1])
                 self.send_json(delete_keyword(block_id))
