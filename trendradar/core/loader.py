@@ -356,6 +356,18 @@ def _load_display_config(config_data: Dict) -> Dict:
     }
 
 
+def _load_source_digest_config(config_data: Dict) -> Dict:
+    """加载多源 AI 整合摘要配置。当前默认关闭，供后续推送整合使用。"""
+    digest = config_data.get("source_digest", {})
+    return {
+        "ENABLED": digest.get("enabled", False),
+        "MAX_ITEMS": int(digest.get("max_items", 30) or 30),
+        "DEDUPE": digest.get("dedupe", True),
+        "INCLUDE_HOTLIST": digest.get("include_hotlist", True),
+        "INCLUDE_RSS": digest.get("include_rss", True),
+    }
+
+
 def _load_ai_config(config_data: Dict) -> Dict:
     """加载 AI 模型配置（LiteLLM 格式）"""
     ai_config = config_data.get("ai", {})
@@ -702,6 +714,9 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
 
     # 推送内容显示配置
     config["DISPLAY"] = _load_display_config(config_data)
+
+    # 多源 AI 整合摘要配置
+    config["SOURCE_DIGEST"] = _load_source_digest_config(config_data)
 
     # 存储配置
     config["STORAGE"] = _load_storage_config(config_data)
