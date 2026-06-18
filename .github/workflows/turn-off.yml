@@ -1,4 +1,4 @@
-name: Turn Off DailyAna
+name: Turn Off Ravenis Core
 
 on:
   workflow_dispatch:
@@ -16,4 +16,4 @@ jobs:
         run: |
           gh workflow disable crawler.yml --repo "${{ github.repository }}"
           gh workflow disable crawler-relax.yml --repo "${{ github.repository }}"
-          echo "DailyAna scheduled crawlers have been turned off."
+          echo "Ravenis Core scheduled crawlers have been turned off."
