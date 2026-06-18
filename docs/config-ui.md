@@ -7,7 +7,7 @@ cd DailyAna
 .\start-config-ui.bat
 ```
 
-双击 `start-config-ui.bat` 也可以启动。启动后会自动打开：
+双击 `start-config-ui.bat` 也可以启动。启动后手动打开：
 
 ```text
 http://127.0.0.1:8765
