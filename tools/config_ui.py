@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # coding=utf-8
 """
-Local DailyAna configuration console.
+Local Ravenis Core configuration console.
 
 Run from the repository root:
     python tools/config_ui.py
@@ -317,7 +317,7 @@ HTML = r"""<!doctype html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>DailyAna 配置台</title>
+  <title>Ravenis Core 配置台</title>
   <style>
     :root { color-scheme: light; --bg:#f5f7fb; --panel:#fff; --line:#d9e0ea; --text:#172033; --muted:#68758a; --accent:#155eef; --danger:#d92d20; --ok:#067647; }
     * { box-sizing: border-box; }
@@ -361,7 +361,7 @@ HTML = r"""<!doctype html>
 </head>
 <body>
   <header>
-    <h1>DailyAna 配置台</h1>
+    <h1>Ravenis Core 配置台</h1>
     <div><span id="status" class="toast"></span></div>
   </header>
   <main>
@@ -675,7 +675,7 @@ def main() -> None:
     host = "127.0.0.1"
     port = 8765
     server = ThreadingHTTPServer((host, port), Handler)
-    print(f"DailyAna 配置台已启动: http://{host}:{port}")
+    print(f"Ravenis Core 配置台已启动: http://{host}:{port}")
     print("按 Ctrl+C 停止。")
     try:
         server.serve_forever()
