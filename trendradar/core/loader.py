@@ -87,6 +87,66 @@ def _load_profile_override(config_path: str) -> Dict[str, Any]:
     return data
 
 
+def _load_content_categories(config_path: str) -> Dict[str, Any]:
+    """Load config/content_categories.yaml if present."""
+    category_path = Path(config_path).parent / "content_categories.yaml"
+    if not category_path.exists():
+        return {}
+    with open(category_path, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+    return data.get("categories", {}) or {}
+
+
+def _apply_content_category_filter(config_data: Dict[str, Any], config_path: str) -> Dict[str, Any]:
+    """Filter platforms, RSS feeds, and keyword groups by selected content categories."""
+    content_config = config_data.get("content", {})
+    if "selected_categories" not in content_config:
+        return config_data
+
+    selected = content_config.get("selected_categories", [])
+    selected = [str(x).strip() for x in selected if str(x).strip()]
+
+    categories = _load_content_categories(config_path)
+    if not categories:
+        print("[分类] content_categories.yaml 未找到或为空，跳过分类过滤")
+        return config_data
+
+    allowed_platforms = set()
+    allowed_rss = set()
+    allowed_keywords = set()
+    valid_selected = []
+    for key in selected:
+        category = categories.get(key)
+        if not isinstance(category, dict):
+            print(f"[分类] 忽略未知分类: {key}")
+            continue
+        valid_selected.append(key)
+        allowed_platforms.update(category.get("platforms", []) or [])
+        allowed_rss.update(category.get("rss_feeds", []) or [])
+        allowed_keywords.update(category.get("keyword_groups", []) or [])
+
+    filtered = deepcopy(config_data)
+    sources = filtered.get("platforms", {}).get("sources", []) or []
+    filtered.setdefault("platforms", {})["sources"] = [
+        item for item in sources if item.get("id") in allowed_platforms
+    ]
+    feeds = filtered.get("rss", {}).get("feeds", []) or []
+    filtered.setdefault("rss", {})["feeds"] = [
+        item for item in feeds if item.get("id") in allowed_rss
+    ]
+
+    filtered["_selected_content_categories"] = valid_selected
+    filtered["_selected_keyword_groups"] = sorted(allowed_keywords)
+    print(
+        "[分类] 已启用分类: "
+        + ", ".join(valid_selected)
+        + f"；平台 {len(filtered.get('platforms', {}).get('sources', []))} 个，"
+        + f"RSS {len(filtered.get('rss', {}).get('feeds', []))} 个，"
+        + f"关键词组 {len(allowed_keywords)} 个"
+    )
+    return filtered
+
+
 def _load_app_config(config_data: Dict) -> Dict:
     """加载应用配置"""
     app_config = config_data.get("app", {})
@@ -590,6 +650,7 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
     profile_override = _load_profile_override(config_path)
     if profile_override:
         config_data = _deep_merge_config(config_data, profile_override)
+    config_data = _apply_content_category_filter(config_data, config_path)
 
     # 合并所有配置
     config = {}
@@ -618,6 +679,8 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
     # 平台配置
     platforms_config = config_data.get("platforms", {})
     config["PLATFORMS"] = [p for p in platforms_config.get("sources", []) if p.get("enabled", True)]
+    config["SELECTED_CONTENT_CATEGORIES"] = config_data.get("_selected_content_categories", [])
+    config["SELECTED_KEYWORD_GROUPS"] = config_data.get("_selected_keyword_groups", [])
 
     # RSS 配置
     config["RSS"] = _load_rss_config(config_data)
