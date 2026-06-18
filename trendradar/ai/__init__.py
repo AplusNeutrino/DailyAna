@@ -1,6 +1,6 @@
 # coding=utf-8
 """
-TrendRadar AI 模块
+Ravenis Core AI 模块
 
 提供 AI 大模型对热点新闻的深度分析和翻译功能
 """
