@@ -38,7 +38,7 @@ body:
   - type: input
     id: version
     attributes:
-      label: 📦 TrendRadar 版本（求助时必填）
+      label: 📦 Ravenis Core 版本（求助时必填）
       description: |
         如果是寻求帮助，请提供版本号。
         💡 Docker 用户：查看容器启动日志 | GitHub Actions 用户：查看文档顶部 version 徽章
