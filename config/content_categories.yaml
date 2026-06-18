@@ -1,0 +1,80 @@
+# Ravenis Core content category mapping.
+#
+# Profiles select categories by key. Each category contains the hotlist platforms,
+# RSS feeds, and keyword groups that should be active when selected.
+
+categories:
+  frontier:
+    name: 前沿
+    description: AI、数据、科技、产业与前沿公司
+    platforms:
+      - wallstreetcn-hot
+      - cls-hot
+      - zhihu
+    rss_feeds:
+      - hacker-news
+      - yahoo-finance
+    keyword_groups:
+      - DeepSeek
+      - 华为
+      - 比亚迪
+      - 大疆
+      - 宇树机器人
+      - 智元机器人
+      - 国产开源模型
+      - 特斯拉
+      - 英伟达
+      - 微软
+      - OpenAI
+      - AI 相关
+      - 芯片
+      - 水电
+      - 自动驾驶
+      - 机器人
+      - 航天
+      - 量子
+      - 生产力
+
+  leisure:
+    name: 休闲
+    description: 游戏、影视、泛娱乐与轻内容
+    platforms:
+      - bilibili-hot-search
+      - tieba
+      - weibo
+      - douyin
+      - zhihu
+    rss_feeds:
+      - ruanyifeng
+    keyword_groups:
+      - 黑神话悟空
+      - 影之刃零
+      - 三体/流浪地球
+      - 申奥
+      - 胖东来
+
+  current_events:
+    name: 时事
+    description: 国内外公共事件、宏观动态与综合新闻
+    platforms:
+      - toutiao
+      - baidu
+      - thepaper
+      - ifeng
+      - wallstreetcn-hot
+      - cls-hot
+      - weibo
+      - zhihu
+    rss_feeds:
+      - yahoo-finance
+    keyword_groups:
+      - 中国
+      - 东亚
+      - 北美
+      - 西欧
+      - 俄罗斯
+      - 印度
+      - 京东
+      - 字节跳动
+      - 腾讯
+      - 胖东来
