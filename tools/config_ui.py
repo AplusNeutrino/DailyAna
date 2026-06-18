@@ -335,6 +335,39 @@ def delete_list_item(section: str, list_key: str, item_id: str) -> dict:
     return state_payload()
 
 
+def save_global_settings(data: dict) -> dict:
+    config = read_yaml(CONFIG_PATH)
+
+    notification = data.get("notification", {})
+    if "enabled" in notification:
+        config.setdefault("notification", {})["enabled"] = normalize_bool(notification["enabled"])
+
+    platforms = data.get("platforms", {})
+    if "enabled" in platforms:
+        config.setdefault("platforms", {})["enabled"] = normalize_bool(platforms["enabled"])
+
+    rss = data.get("rss", {})
+    if "enabled" in rss:
+        config.setdefault("rss", {})["enabled"] = normalize_bool(rss["enabled"])
+
+    source_digest = data.get("source_digest", {})
+    if source_digest:
+        current = config.setdefault("source_digest", {})
+        if "enabled" in source_digest:
+            current["enabled"] = normalize_bool(source_digest["enabled"])
+        if "max_items" in source_digest and source_digest["max_items"] not in ("", None):
+            current["max_items"] = int(source_digest["max_items"])
+        if "dedupe" in source_digest:
+            current["dedupe"] = normalize_bool(source_digest["dedupe"])
+        if "include_hotlist" in source_digest:
+            current["include_hotlist"] = normalize_bool(source_digest["include_hotlist"])
+        if "include_rss" in source_digest:
+            current["include_rss"] = normalize_bool(source_digest["include_rss"])
+
+    write_yaml(CONFIG_PATH, config)
+    return state_payload()
+
+
 def save_profile_settings(data: dict) -> dict:
     profile = data.get("profile")
     if profile not in PROFILE_NAMES:
@@ -344,6 +377,25 @@ def save_profile_settings(data: dict) -> dict:
     current.setdefault("display", {})
     current.setdefault("ai_analysis", {})
     current.setdefault("content", {})
+    current.setdefault("notification", {})
+    current.setdefault("source_digest", {})
+
+    notification = data.get("notification", {})
+    if "enabled" in notification:
+        current["notification"]["enabled"] = normalize_bool(notification["enabled"])
+
+    source_digest = data.get("source_digest", {})
+    if source_digest:
+        if "enabled" in source_digest:
+            current["source_digest"]["enabled"] = normalize_bool(source_digest["enabled"])
+        if "max_items" in source_digest and source_digest["max_items"] not in ("", None):
+            current["source_digest"]["max_items"] = int(source_digest["max_items"])
+        if "dedupe" in source_digest:
+            current["source_digest"]["dedupe"] = normalize_bool(source_digest["dedupe"])
+        if "include_hotlist" in source_digest:
+            current["source_digest"]["include_hotlist"] = normalize_bool(source_digest["include_hotlist"])
+        if "include_rss" in source_digest:
+            current["source_digest"]["include_rss"] = normalize_bool(source_digest["include_rss"])
 
     content = data.get("content", {})
     if "selected_categories" in content:
@@ -394,6 +446,8 @@ def state_payload() -> dict:
         "rss": config.get("rss", {}),
         "display": config.get("display", {}),
         "ai_analysis": config.get("ai_analysis", {}),
+        "notification": config.get("notification", {}),
+        "source_digest": config.get("source_digest", {}),
         "profiles": profiles,
         "effective_profiles": effective,
         "content_categories": enrich_categories(load_categories().get("categories", {})),
@@ -426,7 +480,7 @@ HTML = r"""<!doctype html>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Ravenis Core 配置台</title>
   <style>
-    :root { color-scheme: light; --bg:#f5f7fb; --panel:#fff; --line:#d9e0ea; --text:#172033; --muted:#68758a; --accent:#155eef; --danger:#d92d20; --ok:#067647; }
+    :root { color-scheme: light; --bg:#f5f7fb; --panel:#fff; --line:#d9e0ea; --text:#172033; --muted:#68758a; --accent:#155eef; --danger:#d92d20; --ok:#067647; --warn:#b54708; }
     * { box-sizing: border-box; }
     body { margin:0; background:var(--bg); color:var(--text); font:14px/1.45 system-ui, -apple-system, Segoe UI, sans-serif; }
     header { height:56px; display:flex; align-items:center; justify-content:space-between; padding:0 22px; border-bottom:1px solid var(--line); background:var(--panel); position:sticky; top:0; z-index:10; }
@@ -442,9 +496,12 @@ HTML = r"""<!doctype html>
     textarea { min-height:120px; font-family: ui-monospace, Consolas, monospace; }
     .search { max-width:360px; }
     .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap:14px; }
+    .wide-grid { display:grid; grid-template-columns: minmax(320px, 1.2fr) minmax(320px, .8fr); gap:14px; margin-bottom:16px; }
     .card { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:14px; }
     .card h3 { margin:0 0 10px; font-size:15px; }
+    .card p { margin:6px 0; }
     .muted { color:var(--muted); }
+    .note { border-left:3px solid var(--accent); background:#f8fbff; padding:9px 11px; border-radius:6px; color:#344054; }
     .row { display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-bottom:10px; }
     .row3 { display:grid; grid-template-columns: 1fr 1fr 1fr; gap:10px; margin-bottom:10px; }
     .list { display:grid; gap:10px; }
@@ -470,7 +527,9 @@ HTML = r"""<!doctype html>
     .checks { display:flex; flex-wrap:wrap; gap:8px 14px; margin:8px 0 10px; }
     .checks label { display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
     .checks input { width:auto; }
+    .danger-zone { border-color:#fecdca; background:#fffafa; }
     code { background:#eef2f7; padding:2px 5px; border-radius:5px; }
+    @media (max-width: 900px) { .wide-grid { grid-template-columns:1fr; } }
     @media (max-width: 760px) { main { grid-template-columns:1fr; } nav { display:flex; overflow:auto; border-right:0; border-bottom:1px solid var(--line); } nav button { white-space:nowrap; } .row,.row3 { grid-template-columns:1fr; } }
   </style>
 </head>
@@ -489,6 +548,21 @@ HTML = r"""<!doctype html>
     </nav>
 
     <section id="sources" class="active">
+      <div class="wide-grid">
+        <div class="card">
+          <h3>总开关</h3>
+          <label class="check"><input type="checkbox" id="globalNotification" /> 允许发送推送通知</label>
+          <label class="check"><input type="checkbox" id="globalPlatforms" /> 启用热榜平台抓取</label>
+          <label class="check"><input type="checkbox" id="globalRss" /> 启用 RSS 抓取</label>
+          <div class="actions"><button class="primary" onclick="saveGlobal()">保存总开关</button></div>
+          <p class="muted">总推送关闭后，工作/休闲方案即使开启也不会发送通知。</p>
+        </div>
+        <div class="card">
+          <h3>添加源前先判断</h3>
+          <p class="note">RSS/Atom 地址可以直接添加。普通网页不能直接当 RSS 用，除非它提供 RSS、API，或后续为它写专门抓取规则。</p>
+          <p class="muted">大量添加时，建议先填 RSS：id、名称、URL、分类，然后保存。`max_age_days` 可空，默认跟随全局新鲜度。</p>
+        </div>
+      </div>
       <div class="toolbar">
         <input class="search" id="sourceSearch" placeholder="搜索平台/RSS id、名称、域名" />
         <button class="primary" onclick="savePlatform()">保存热榜源</button>
@@ -501,6 +575,7 @@ HTML = r"""<!doctype html>
           <div class="row"><input id="platDomain" placeholder="校验域名，如 zhihu.com" /><select id="platEnabled"><option value="true">启用</option><option value="false">禁用</option></select></div>
           <div class="muted">所属内容分类</div>
           <div id="platCategories" class="checks"></div>
+          <div class="actions"><button class="ghost" onclick="clearPlatformForm()">清空热榜表单</button></div>
           <p class="muted">id 相同会覆盖；删除会从 <code>platforms.sources</code> 移除。</p>
         </div>
         <div class="card">
@@ -510,6 +585,7 @@ HTML = r"""<!doctype html>
           <div class="row"><input id="rssMaxAge" placeholder="max_age_days 可空" /><select id="rssEnabled"><option value="true">启用</option><option value="false">禁用</option></select></div>
           <div class="muted">所属内容分类</div>
           <div id="rssCategories" class="checks"></div>
+          <div class="actions"><button class="ghost" onclick="clearRssForm()">清空 RSS 表单</button></div>
         </div>
       </div>
       <h3>热榜平台</h3><div id="platformList" class="list"></div>
@@ -548,9 +624,24 @@ HTML = r"""<!doctype html>
       </div>
       <div class="grid">
         <div class="card">
+          <h3>本方案推送开关</h3>
+          <label class="check"><input type="checkbox" id="profileNotification" /> 启用当前方案推送</label>
+          <p class="muted">关闭后，对应 workflow 仍可运行抓取和归档，但不会发送本方案通知。</p>
+        </div>
+        <div class="card">
           <h3>本方案推送哪些分类</h3>
           <div id="profileCategories" class="checks"></div>
           <p class="muted">这里决定当前方案会启用哪些热榜源、RSS 源和关键词组。</p>
+        </div>
+        <div class="card">
+          <h3>AI 整合摘要</h3>
+          <label class="check"><input type="checkbox" id="digestEnabled" /> 启用多源 AI 整合摘要</label>
+          <label class="check"><input type="checkbox" id="digestDedupe" /> 合并相似/重复信息</label>
+          <label class="check"><input type="checkbox" id="digestHotlist" /> 纳入热榜源</label>
+          <label class="check"><input type="checkbox" id="digestRss" /> 纳入 RSS 源</label>
+          <label>整合后最多输出条数</label>
+          <input id="digestMaxItems" type="number" min="1" />
+          <p class="muted">默认关闭。打开后用于把当前方案勾选的多渠道信息先去重整合，再控制输出数量。</p>
         </div>
         <div class="card">
           <h3>推送显示区域</h3>
@@ -636,7 +727,7 @@ HTML = r"""<!doctype html>
       renderCategoryChecks('platCategories', 'platCategory');
       renderCategoryChecks('rssCategories', 'rssCategory');
       renderCategoryChecks('keywordCategories', 'keywordCategory');
-      renderSources(); renderKeywords(); renderCategories(); renderProfile(); renderHistory();
+      renderGlobal(); renderSources(); renderKeywords(); renderCategories(); renderProfile(); renderHistory();
     }
 
     document.querySelectorAll('nav button').forEach(btn => btn.addEventListener('click', () => {
@@ -647,6 +738,20 @@ HTML = r"""<!doctype html>
     qs('sourceSearch').addEventListener('input', renderSources);
     qs('keywordSearch').addEventListener('input', renderKeywords);
     qs('categorySearch').addEventListener('input', renderCategories);
+
+    function renderGlobal() {
+      qs('globalNotification').checked = (state.notification || {}).enabled !== false;
+      qs('globalPlatforms').checked = (state.platforms || {}).enabled !== false;
+      qs('globalRss').checked = (state.rss || {}).enabled !== false;
+    }
+    async function saveGlobal() {
+      state = await api('/api/global',{method:'POST',body:JSON.stringify({
+        notification: {enabled: qs('globalNotification').checked},
+        platforms: {enabled: qs('globalPlatforms').checked},
+        rss: {enabled: qs('globalRss').checked}
+      })});
+      renderGlobal(); toast('总开关已保存');
+    }
 
     function renderSources() {
       const q = qs('sourceSearch').value.toLowerCase();
@@ -665,6 +770,8 @@ HTML = r"""<!doctype html>
     function editRssByIndex(idx){ editRss((state.rss.feeds || [])[idx]); }
     function editPlatform(x){ qs('platId').value=x.id; qs('platName').value=x.name; qs('platDomain').value=x.expected_domain||''; qs('platEnabled').value=String(x.enabled!==false); renderCategoryChecks('platCategories', 'platCategory', itemCategories('platforms', x.id)); }
     function editRss(x){ qs('rssId').value=x.id; qs('rssName').value=x.name; qs('rssUrl').value=x.url; qs('rssEnabled').value=String(x.enabled!==false); qs('rssMaxAge').value=x.max_age_days ?? ''; renderCategoryChecks('rssCategories', 'rssCategory', itemCategories('rss_feeds', x.id)); }
+    function clearPlatformForm(){ qs('platId').value=''; qs('platName').value=''; qs('platDomain').value=''; qs('platEnabled').value='true'; renderCategoryChecks('platCategories', 'platCategory'); }
+    function clearRssForm(){ qs('rssId').value=''; qs('rssName').value=''; qs('rssUrl').value=''; qs('rssMaxAge').value=''; qs('rssEnabled').value='true'; renderCategoryChecks('rssCategories', 'rssCategory'); }
     async function savePlatform(){ state = await api('/api/platforms',{method:'POST',body:JSON.stringify({id:qs('platId').value,name:qs('platName').value,expected_domain:qs('platDomain').value,enabled:qs('platEnabled').value,categories:checkedCategories('platCategory')})}); renderSources(); renderCategories(); toast('热榜源已保存'); }
     async function saveRss(){ state = await api('/api/rss',{method:'POST',body:JSON.stringify({id:qs('rssId').value,name:qs('rssName').value,url:qs('rssUrl').value,enabled:qs('rssEnabled').value,max_age_days:qs('rssMaxAge').value,categories:checkedCategories('rssCategory')})}); renderSources(); renderCategories(); toast('RSS 源已保存'); }
     async function deletePlatform(id){ if(confirm('删除热榜源 '+id+'?')){ state = await api('/api/platforms/'+encodeURIComponent(id),{method:'DELETE'}); renderSources(); renderCategories(); } }
@@ -715,6 +822,7 @@ HTML = r"""<!doctype html>
     function renderProfile() {
       const eff = state.effective_profiles[currentProfile] || {};
       const rawProfile = state.profiles[currentProfile] || {};
+      qs('profileNotification').checked = ((rawProfile.notification || eff.notification || {}).enabled !== false);
       renderCategoryChecks('profileCategories', 'profileCategory', (rawProfile.content || {}).selected_categories || []);
       const display = eff.display || {};
       const regions = display.regions || {};
@@ -734,6 +842,12 @@ HTML = r"""<!doctype html>
       qs('standalonePlatforms').value = (sa.platforms || []).join(', ');
       qs('standaloneRss').value = (sa.rss_feeds || []).join(', ');
       qs('standaloneMax').value = sa.max_items ?? 20;
+      const digest = rawProfile.source_digest || eff.source_digest || state.source_digest || {};
+      qs('digestEnabled').checked = !!digest.enabled;
+      qs('digestDedupe').checked = digest.dedupe !== false;
+      qs('digestHotlist').checked = digest.include_hotlist !== false;
+      qs('digestRss').checked = digest.include_rss !== false;
+      qs('digestMaxItems').value = digest.max_items || 30;
     }
     async function saveProfile() {
       state = await api('/api/profiles',{method:'PUT',body:JSON.stringify({
@@ -744,6 +858,8 @@ HTML = r"""<!doctype html>
           standalone: {platforms:csv(qs('standalonePlatforms').value), rss_feeds:csv(qs('standaloneRss').value), max_items:qs('standaloneMax').value}
         },
         content: {selected_categories: checkedCategories('profileCategory')},
+        notification: {enabled: qs('profileNotification').checked},
+        source_digest: {enabled: qs('digestEnabled').checked, dedupe: qs('digestDedupe').checked, include_hotlist: qs('digestHotlist').checked, include_rss: qs('digestRss').checked, max_items: qs('digestMaxItems').value},
         ai_analysis: {enabled:qs('aiEnabled').checked, include_rss:qs('aiRss').checked, include_standalone:qs('aiStandalone').checked, include_rank_timeline:qs('aiTimeline').checked, max_news_for_analysis:qs('aiMaxNews').value}
       })});
       renderProfile(); toast('推送方案已保存');
@@ -819,6 +935,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(state_payload())
             elif parsed.path == "/api/keywords":
                 self.send_json(upsert_keyword(None, data.get("text", ""), data.get("categories", [])))
+            elif parsed.path == "/api/global":
+                self.send_json(save_global_settings(data))
             else:
                 self.send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
         except Exception as exc:
