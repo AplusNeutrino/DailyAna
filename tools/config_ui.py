@@ -12,6 +12,7 @@ Then open:
 
 from __future__ import annotations
 
+import html
 import json
 import re
 from copy import deepcopy
@@ -75,20 +76,22 @@ def save_keywords_text(text: str) -> None:
 
 def split_keyword_blocks() -> tuple[str, list[dict]]:
     text = load_keywords_text()
-    marker = "[WORD_GROUPS]"
-    idx = text.find(marker)
-    if idx == -1:
+    lines = text.splitlines()
+    marker_index = None
+    for i, line in enumerate(lines):
+        if line.strip() == "[WORD_GROUPS]":
+            marker_index = i
+            break
+
+    if marker_index is None:
         return text.rstrip() + "\n\n[WORD_GROUPS]\n", []
 
-    marker_end = text.find("\n", idx)
-    if marker_end == -1:
-        marker_end = len(text)
-    preamble = text[: marker_end + 1].rstrip() + "\n\n"
-    body = text[marker_end + 1 :]
+    preamble = "\n".join(lines[: marker_index + 1]).rstrip() + "\n\n"
+    body_lines = lines[marker_index + 1 :]
 
     blocks = []
     current: list[str] = []
-    for line in body.splitlines():
+    for line in body_lines:
         if line.strip():
             current.append(line)
         else:
@@ -120,6 +123,23 @@ def make_keyword_block(index: int, text: str) -> dict:
         "title": title,
         "text": "\n".join(lines).strip(),
     }
+
+
+def get_global_filters() -> list[str]:
+    text = load_keywords_text()
+    lines = text.splitlines()
+    in_filter = False
+    filters = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped == "[GLOBAL_FILTER]":
+            in_filter = True
+            continue
+        if stripped == "[WORD_GROUPS]":
+            break
+        if in_filter and stripped and not stripped.startswith("#"):
+            filters.append(stripped)
+    return filters
 
 
 def write_keyword_blocks(preamble: str, blocks: list[dict]) -> None:
@@ -283,6 +303,7 @@ def state_payload() -> dict:
         "profiles": profiles,
         "effective_profiles": effective,
         "keywords": get_keyword_groups(),
+        "global_filters": get_global_filters(),
         "history": {
             "ready": False,
             "endpoint": "/api/history/search?q=keyword",
@@ -457,6 +478,9 @@ HTML = r"""<!doctype html>
     function toast(msg) { document.getElementById('status').textContent = msg; setTimeout(()=>document.getElementById('status').textContent='', 2500); }
     function qs(id) { return document.getElementById(id); }
     function csv(v) { return (v || '').split(',').map(x=>x.trim()).filter(Boolean); }
+    function esc(v) {
+      return String(v ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+    }
 
     async function load() {
       state = await api('/api/state');
@@ -474,16 +498,18 @@ HTML = r"""<!doctype html>
     function renderSources() {
       const q = qs('sourceSearch').value.toLowerCase();
       const platforms = state.platforms.sources || [];
-      qs('platformList').innerHTML = platforms.filter(x => JSON.stringify(x).toLowerCase().includes(q)).map(x => `
-        <div class="item"><div class="item-head"><div><b>${x.name}</b> <span class="muted">${x.id}</span><br><span class="muted">${x.expected_domain || ''}</span></div><span class="pill ${x.enabled === false ? 'off':'on'}">${x.enabled === false ? '禁用':'启用'}</span></div>
-        <div class="actions"><button class="ghost" onclick='editPlatform(${JSON.stringify(x)})'>编辑</button><button class="danger" onclick="deletePlatform('${x.id}')">删除</button></div></div>
+      qs('platformList').innerHTML = platforms.filter(x => JSON.stringify(x).toLowerCase().includes(q)).map((x, idx) => `
+        <div class="item"><div class="item-head"><div><b>${esc(x.name)}</b> <span class="muted">${esc(x.id)}</span><br><span class="muted">${esc(x.expected_domain || '')}</span></div><span class="pill ${x.enabled === false ? 'off':'on'}">${x.enabled === false ? '禁用':'启用'}</span></div>
+        <div class="actions"><button class="ghost" onclick="editPlatformByIndex(${idx})">编辑</button><button class="danger" onclick="deletePlatform('${esc(x.id)}')">删除</button></div></div>
       `).join('');
       const feeds = state.rss.feeds || [];
-      qs('rssList').innerHTML = feeds.filter(x => JSON.stringify(x).toLowerCase().includes(q)).map(x => `
-        <div class="item"><div class="item-head"><div><b>${x.name}</b> <span class="muted">${x.id}</span><br><span class="muted">${x.url}</span></div><span class="pill ${x.enabled === false ? 'off':'on'}">${x.enabled === false ? '禁用':'启用'}</span></div>
-        <div class="actions"><button class="ghost" onclick='editRss(${JSON.stringify(x)})'>编辑</button><button class="danger" onclick="deleteRss('${x.id}')">删除</button></div></div>
+      qs('rssList').innerHTML = feeds.filter(x => JSON.stringify(x).toLowerCase().includes(q)).map((x, idx) => `
+        <div class="item"><div class="item-head"><div><b>${esc(x.name)}</b> <span class="muted">${esc(x.id)}</span><br><span class="muted">${esc(x.url)}</span></div><span class="pill ${x.enabled === false ? 'off':'on'}">${x.enabled === false ? '禁用':'启用'}</span></div>
+        <div class="actions"><button class="ghost" onclick="editRssByIndex(${idx})">编辑</button><button class="danger" onclick="deleteRss('${esc(x.id)}')">删除</button></div></div>
       `).join('');
     }
+    function editPlatformByIndex(idx){ editPlatform((state.platforms.sources || [])[idx]); }
+    function editRssByIndex(idx){ editRss((state.rss.feeds || [])[idx]); }
     function editPlatform(x){ qs('platId').value=x.id; qs('platName').value=x.name; qs('platDomain').value=x.expected_domain||''; qs('platEnabled').value=String(x.enabled!==false); }
     function editRss(x){ qs('rssId').value=x.id; qs('rssName').value=x.name; qs('rssUrl').value=x.url; qs('rssEnabled').value=String(x.enabled!==false); qs('rssMaxAge').value=x.max_age_days ?? ''; }
     async function savePlatform(){ state = await api('/api/platforms',{method:'POST',body:JSON.stringify({id:qs('platId').value,name:qs('platName').value,expected_domain:qs('platDomain').value,enabled:qs('platEnabled').value})}); renderSources(); toast('热榜源已保存'); }
@@ -493,13 +519,14 @@ HTML = r"""<!doctype html>
 
     function renderKeywords() {
       const q = qs('keywordSearch').value.toLowerCase();
+      const filterHtml = (state.global_filters || []).length ? `<div class="item"><b>全局过滤</b><pre>${esc((state.global_filters || []).join('\\n'))}</pre><p class="muted">全局过滤暂只展示，编辑请直接改 frequency_words.txt。</p></div>` : '';
       qs('keywordList').innerHTML = state.keywords.filter(x => (x.title + x.text).toLowerCase().includes(q)).map(x => `
-        <div class="item"><div class="item-head"><div><b>${x.title}</b><pre>${x.text}</pre></div></div>
-        <div class="actions"><button class="ghost" onclick='editKeyword(${x.id}, ${JSON.stringify(x.text)})'>编辑</button><button class="danger" onclick="deleteKeyword(${x.id})">删除</button></div></div>
-      `).join('');
+        <div class="item"><div class="item-head"><div><b>${esc(x.title)}</b><pre>${esc(x.text)}</pre></div></div>
+        <div class="actions"><button class="ghost" onclick="editKeyword(${x.id})">编辑</button><button class="danger" onclick="deleteKeyword(${x.id})">删除</button></div></div>
+      `).join('') + filterHtml;
     }
     function newKeyword(){ editingKeywordId=null; qs('keywordEditorTitle').textContent='新增关键词组'; qs('keywordText').value='[新组名]\\n关键词'; qs('keywordEditor').style.display='block'; }
-    function editKeyword(id, text){ editingKeywordId=id; qs('keywordEditorTitle').textContent='编辑关键词组'; qs('keywordText').value=text; qs('keywordEditor').style.display='block'; }
+    function editKeyword(id){ const item = (state.keywords || []).find(x => x.id === id); if (!item) return; editingKeywordId=id; qs('keywordEditorTitle').textContent='编辑关键词组'; qs('keywordText').value=item.text; qs('keywordEditor').style.display='block'; }
     function closeKeywordEditor(){ qs('keywordEditor').style.display='none'; }
     async function saveKeyword(){ const method = editingKeywordId === null ? 'POST':'PUT'; const path = editingKeywordId === null ? '/api/keywords':'/api/keywords/'+editingKeywordId; const data = await api(path,{method,body:JSON.stringify({text:qs('keywordText').value})}); state.keywords=data.groups; closeKeywordEditor(); renderKeywords(); toast('关键词已保存'); }
     async function deleteKeyword(id){ if(confirm('删除这个关键词组?')){ const data = await api('/api/keywords/'+id,{method:'DELETE'}); state.keywords=data.groups; renderKeywords(); } }
