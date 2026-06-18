@@ -1,6 +1,6 @@
 # coding=utf-8
 """
-TrendRadar 主程序
+Ravenis Core 主程序
 
 热点新闻聚合与分析工具
 支持: python -m trendradar
@@ -204,7 +204,7 @@ class NewsAnalyzer:
         if config is None:
             print("正在加载配置...")
             config = load_config()
-        print(f"TrendRadar v{__version__} 配置加载完成")
+        print(f"Ravenis Core v{__version__} 配置加载完成")
         print(f"监控平台数量: {len(config['PLATFORMS'])}")
         print(f"时区: {config.get('TIMEZONE', DEFAULT_TIMEZONE)}")
 
@@ -1820,7 +1820,7 @@ def _save_doctor_report(
 def _run_doctor(config_path: Optional[str] = None) -> bool:
     """运行环境体检"""
     print("=" * 60)
-    print(f"TrendRadar v{__version__} 环境体检")
+    print(f"Ravenis Core v{__version__} 环境体检")
     print("=" * 60)
 
     results: List[Tuple[str, str, str]] = []
@@ -2030,7 +2030,7 @@ def _build_test_report_data(ctx: AppContext) -> Dict:
     """构造通知测试用报告数据"""
     now = ctx.get_time()
     time_display = now.strftime("%H:%M")
-    title = f"TrendRadar 通知测试消息（{now.strftime('%Y-%m-%d %H:%M:%S')}）"
+    title = f"Ravenis Core 通知测试消息（{now.strftime('%Y-%m-%d %H:%M:%S')}）"
 
     return {
         "stats": [
@@ -2040,8 +2040,8 @@ def _build_test_report_data(ctx: AppContext) -> Dict:
                 "titles": [
                     {
                         "title": title,
-                        "source_name": "TrendRadar",
-                        "url": "https://github.com/sansan0/TrendRadar",
+                        "source_name": "Ravenis Core",
+                        "url": "https://github.com/AplusNeutrino/DailyAna",
                         "mobile_url": "",
                         "ranks": [1],
                         "rank_threshold": ctx.rank_threshold,
@@ -2068,9 +2068,9 @@ def _create_test_html_file(ctx: AppContext) -> Optional[str]:
         html_path = output_dir / f"notification_test_{ctx.format_time()}.html"
         html_content = f"""<!DOCTYPE html>
 <html lang="zh-CN">
-<head><meta charset="UTF-8"><title>TrendRadar 通知测试</title></head>
+<head><meta charset="UTF-8"><title>Ravenis Core 通知测试</title></head>
 <body>
-<h2>TrendRadar 通知连通性测试</h2>
+<h2>Ravenis Core 通知连通性测试</h2>
 <p>测试时间：{now.strftime('%Y-%m-%d %H:%M:%S')} ({ctx.timezone})</p>
 <p>这是一条测试消息，用于验证邮件渠道是否可达。</p>
 </body>
@@ -2175,7 +2175,7 @@ def main():
     """主程序入口"""
     # 解析命令行参数
     parser = argparse.ArgumentParser(
-        description="TrendRadar - 热点新闻聚合与分析工具",
+        description="Ravenis Core - 热点新闻聚合与分析工具",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 调度状态命令:
@@ -2274,7 +2274,7 @@ def _handle_status_commands(config: Dict) -> None:
     ctx = AppContext(config)
 
     print("=" * 60)
-    print(f"TrendRadar v{__version__} 调度状态")
+    print(f"Ravenis Core v{__version__} 调度状态")
     print("=" * 60)
 
     try:
