@@ -1,14 +1,15 @@
-name: Get Hot News
+name: Get Hot News - Weekday
 
 on:
   schedule:
-    # 修改运行时间：只改第一个数字（0-59），表示每小时第几分钟运行
-    # Change time: Only modify the first number (0-59) = minute of each hour
-    #
-    # 示例 / Examples:
-    #   "15 * * * *"     → 每小时第15分钟 / minute 15 every hour
-    #   "30 0-14 * * *"  → 北京时间 8:00-22:00 每小时第30分钟 / Beijing 8am-10pm
-    - cron: "33 * * * *"
+    # Weekday draft profile.
+    # GitHub cron uses UTC. These are Beijing time:
+    #   Mon-Fri 06:00 -> Sun-Thu 22:00 UTC
+    #   Mon-Fri 14:15 -> Mon-Fri 06:15 UTC
+    #   Mon-Fri 18:10 -> Mon-Fri 10:10 UTC
+    - cron: "0 22 * * 0-4"
+    - cron: "15 6 * * 1-5"
+    - cron: "10 10 * * 1-5"
 
   workflow_dispatch:
 
@@ -104,4 +105,5 @@ jobs:
           S3_ENDPOINT_URL: ${{ secrets.S3_ENDPOINT_URL }}
           S3_REGION: ${{ secrets.S3_REGION }}
           GITHUB_ACTIONS: true
+          DAILYANA_PROFILE: weekday
         run: uv run python -m trendradar
