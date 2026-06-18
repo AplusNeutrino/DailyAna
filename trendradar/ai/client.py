@@ -93,7 +93,7 @@ class AIClient:
         # 部分 OpenAI 兼容网关会拦截没有 User-Agent 的自动化请求
         if self.api_base:
             headers = dict(params.get("extra_headers") or {})
-            headers.setdefault("User-Agent", "DailyAna/TrendRadar GitHubActions")
+            headers.setdefault("User-Agent", "RavenisCore/GitHubActions")
             params["extra_headers"] = headers
 
         # 合并其他额外参数
