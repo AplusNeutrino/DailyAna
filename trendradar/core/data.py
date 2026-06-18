@@ -6,7 +6,7 @@
 - read_all_today_titles: 从存储后端读取当天所有标题
 - detect_latest_new_titles: 检测最新批次的新增标题
 
-Author: TrendRadar Team
+Author: Ravenis Core Team
 """
 
 from typing import Dict, List, Tuple, Optional
