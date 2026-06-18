@@ -1,4 +1,4 @@
-# DailyAna 配置台
+# Ravenis Core 配置台
 
 本地启动：
 
@@ -7,24 +7,20 @@ cd DailyAna
 .\start-config-ui.bat
 ```
 
-如果你已经有项目虚拟环境，也可以直接运行：
-
-```powershell
-python tools/config_ui.py
-```
-
-打开：
+双击 `start-config-ui.bat` 也可以启动。启动后会自动打开：
 
 ```text
 http://127.0.0.1:8765
 ```
+
+配置台运行期间需要保留启动窗口。关闭该窗口会停止本地配置台。
 
 ## 功能
 
 - 添加、查找、编辑、删除热榜平台源。
 - 添加、查找、编辑、删除 RSS 源。
 - 添加、查找、编辑、删除关键词组。
-- 分别调整 work 和 relax 两套推送方案。
+- 单独调整 `work` 和 `relax` 两套推送方案。
 - 调整热榜、RSS、AI 分析、新增热点、独立展示区是否显示。
 - 调整 AI 分析是否包含 RSS、standalone、排名轨迹。
 - 预留历史新闻搜索接口：`/api/history/search?q=关键词`。
@@ -33,10 +29,10 @@ http://127.0.0.1:8765
 
 GitHub Actions 已经拆成：
 
-- `Get Hot News - Work`，设置 `DAILYANA_PROFILE=work`
-- `Get Hot News - Relax`，设置 `DAILYANA_PROFILE=relax`
+- `Ravenis Core - Work`，设置 `DAILYANA_PROFILE=work`
+- `Ravenis Core - Relax`，设置 `DAILYANA_PROFILE=relax`
 
-这两个 profile 不绑定工作日/周末。你可以按一天三次推送的时段混搭，例如：
+这两套 profile 不绑定工作日/周末。你可以按一天多次推送的时段混搭，例如：
 
 - 早上、下午使用 `work`
 - 晚上使用 `relax`
