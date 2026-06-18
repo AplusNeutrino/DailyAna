@@ -2,6 +2,11 @@
 # Loaded when DAILYANA_PROFILE=relax.
 # This currently preserves the existing current style.
 
+content:
+  selected_categories:
+    - leisure
+    - current_events
+
 display:
   region_order:
     - new_items
