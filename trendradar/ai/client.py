@@ -29,6 +29,7 @@ class AIClient:
                 - TIMEOUT: 请求超时时间（秒）
                 - NUM_RETRIES: 重试次数（可选）
                 - FALLBACK_MODELS: 备用模型列表（可选）
+                - EXTRA_PARAMS: 传给 LiteLLM 的额外参数（可选）
         """
         self.model = config.get("MODEL", "deepseek/deepseek-chat")
         self.api_key = config.get("API_KEY") or os.environ.get("AI_API_KEY", "")
@@ -38,6 +39,7 @@ class AIClient:
         self.timeout = config.get("TIMEOUT", 120)
         self.num_retries = config.get("NUM_RETRIES", 2)
         self.fallback_models = config.get("FALLBACK_MODELS", [])
+        self.extra_params = config.get("EXTRA_PARAMS", {}) or {}
 
     def chat(
         self,
@@ -82,6 +84,17 @@ class AIClient:
         # 添加 fallback 模型（如果配置了）
         if self.fallback_models:
             params["fallbacks"] = self.fallback_models
+
+        # 合并配置文件中的 LiteLLM 额外参数
+        for key, value in self.extra_params.items():
+            if key not in params:
+                params[key] = value
+
+        # 部分 OpenAI 兼容网关会拦截没有 User-Agent 的自动化请求
+        if self.api_base:
+            headers = dict(params.get("extra_headers") or {})
+            headers.setdefault("User-Agent", "DailyAna/TrendRadar GitHubActions")
+            params["extra_headers"] = headers
 
         # 合并其他额外参数
         for key, value in kwargs.items():
