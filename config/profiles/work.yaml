@@ -2,6 +2,11 @@
 # Loaded when DAILYANA_PROFILE=work.
 # Keep this file small: only put fields that should differ from config.yaml.
 
+content:
+  selected_categories:
+    - frontier
+    - current_events
+
 display:
   region_order:
     - new_items
