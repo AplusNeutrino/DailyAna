@@ -1,15 +1,15 @@
-name: Get Hot News - Weekday
+name: Get Hot News - Work
 
 on:
   schedule:
-    # Weekday draft profile.
+    # Work profile.
     # GitHub cron uses UTC. These are Beijing time:
-    #   Mon-Fri 06:00 -> Sun-Thu 22:00 UTC
-    #   Mon-Fri 14:15 -> Mon-Fri 06:15 UTC
-    #   Mon-Fri 18:10 -> Mon-Fri 10:10 UTC
-    - cron: "0 22 * * 0-4"
-    - cron: "15 6 * * 1-5"
-    - cron: "10 10 * * 1-5"
+    #   06:00 -> previous day 22:00 UTC
+    #   14:15 -> same day 06:15 UTC
+    #
+    # Move cron lines between work/relax workflows to mix the three daily pushes.
+    - cron: "0 22 * * *"
+    - cron: "15 6 * * *"
 
   workflow_dispatch:
 
@@ -105,5 +105,5 @@ jobs:
           S3_ENDPOINT_URL: ${{ secrets.S3_ENDPOINT_URL }}
           S3_REGION: ${{ secrets.S3_REGION }}
           GITHUB_ACTIONS: true
-          DAILYANA_PROFILE: weekday
+          DAILYANA_PROFILE: work
         run: uv run python -m trendradar
