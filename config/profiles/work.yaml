@@ -1,0 +1,23 @@
+# Work push profile.
+# Loaded when DAILYANA_PROFILE=work.
+# Keep this file small: only put fields that should differ from config.yaml.
+
+display:
+  region_order:
+    - new_items
+    - hotlist
+    - rss
+    - standalone
+    - ai_analysis
+  regions:
+    hotlist: true
+    new_items: false
+    rss: true
+    standalone: false
+    ai_analysis: true
+
+ai_analysis:
+  enabled: true
+  include_rss: false
+  include_standalone: true
+  include_rank_timeline: true
