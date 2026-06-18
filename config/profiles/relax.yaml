@@ -1,0 +1,23 @@
+# Relax push profile.
+# Loaded when DAILYANA_PROFILE=relax.
+# This currently preserves the existing current style.
+
+display:
+  region_order:
+    - new_items
+    - hotlist
+    - rss
+    - standalone
+    - ai_analysis
+  regions:
+    hotlist: true
+    new_items: false
+    rss: true
+    standalone: false
+    ai_analysis: true
+
+ai_analysis:
+  enabled: true
+  include_rss: false
+  include_standalone: true
+  include_rank_timeline: true
