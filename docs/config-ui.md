@@ -1,5 +1,11 @@
 # Ravenis Core 配置台
 
+完整使用说明见：
+
+```text
+docs/Ravenis-Core-使用手册.md
+```
+
 本地启动：
 
 ```powershell
