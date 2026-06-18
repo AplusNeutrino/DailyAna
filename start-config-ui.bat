@@ -1,6 +1,9 @@
 @echo off
 setlocal
+title Ravenis Core Config UI
 cd /d "%~dp0"
+
+start "" powershell -NoProfile -WindowStyle Hidden -Command "Start-Sleep -Seconds 2; Start-Process 'http://127.0.0.1:8765/'"
 
 if exist ".venv\Scripts\python.exe" (
   ".venv\Scripts\python.exe" tools\config_ui.py
