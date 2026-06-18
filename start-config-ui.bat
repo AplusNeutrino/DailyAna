@@ -7,6 +7,11 @@ if exist ".venv\Scripts\python.exe" (
   goto :end
 )
 
+if exist ".config-ui-venv\Scripts\python.exe" (
+  ".config-ui-venv\Scripts\python.exe" tools\config_ui.py
+  goto :end
+)
+
 where py >nul 2>nul
 if %errorlevel%==0 (
   py tools\config_ui.py
@@ -25,4 +30,3 @@ pause
 
 :end
 endlocal
-
