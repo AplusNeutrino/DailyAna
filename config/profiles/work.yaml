@@ -7,6 +7,16 @@ content:
     - frontier
     - current_events
 
+notification:
+  enabled: true
+
+source_digest:
+  enabled: false
+  max_items: 30
+  dedupe: true
+  include_hotlist: true
+  include_rss: true
+
 display:
   region_order:
     - new_items
