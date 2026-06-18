@@ -1,4 +1,4 @@
-# coding=utf-8
+﻿# coding=utf-8
 """
 RSS HTML 报告渲染模块
 
@@ -395,8 +395,8 @@ def render_rss_html_content(
 
             <div class="footer">
                 <div class="footer-content">
-                    由 <span class="project-name">TrendRadar</span> 生成 ·
-                    <a href="https://github.com/sansan0/TrendRadar" target="_blank" class="footer-link">
+                    由 <span class="project-name">Ravenis Core</span> 生成 ·
+                    <a href="https://github.com/AplusNeutrino/DailyAna" target="_blank" class="footer-link">
                         GitHub 开源项目
                     </a>
                 </div>
@@ -445,7 +445,7 @@ def render_rss_html_content(
 
                     const link = document.createElement('a');
                     const now = new Date();
-                    const filename = `TrendRadar_RSS订阅_${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}.png`;
+                    const filename = `RavenisCore_RSS订阅_${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}.png`;
 
                     link.download = filename;
                     link.href = canvas.toDataURL('image/png', 1.0);
@@ -480,3 +480,4 @@ def render_rss_html_content(
     """
 
     return html
+
