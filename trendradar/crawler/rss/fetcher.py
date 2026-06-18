@@ -71,7 +71,7 @@ class RSSFetcher:
         """创建请求会话"""
         session = requests.Session()
         session.headers.update({
-            "User-Agent": "TrendRadar/2.0 RSS Reader (https://github.com/trendradar)",
+            "User-Agent": "RavenisCore/2.0 RSS Reader (https://github.com/AplusNeutrino/DailyAna)",
             "Accept": "application/feed+json, application/json, application/rss+xml, application/atom+xml, application/xml, text/xml, */*",
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
         })
