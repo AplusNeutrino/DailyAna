@@ -6,6 +6,7 @@
 """
 
 import os
+from copy import deepcopy
 from pathlib import Path
 from typing import Dict, Any, Optional
 
@@ -48,6 +49,42 @@ def _get_env_int_or_none(key: str) -> Optional[int]:
 def _get_env_str(key: str, default: str = "") -> str:
     """从环境变量获取字符串值"""
     return os.environ.get(key, "").strip() or default
+
+
+def _deep_merge_config(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+    """Recursively merge profile overrides into the main config."""
+    merged = deepcopy(base)
+    for key, value in (override or {}).items():
+        if (
+            isinstance(value, dict)
+            and isinstance(merged.get(key), dict)
+        ):
+            merged[key] = _deep_merge_config(merged[key], value)
+        else:
+            merged[key] = deepcopy(value)
+    return merged
+
+
+def _load_profile_override(config_path: str) -> Dict[str, Any]:
+    """Load config/profiles/<DAILYANA_PROFILE>.yaml if requested."""
+    profile = _get_env_str("DAILYANA_PROFILE")
+    if not profile:
+        return {}
+
+    safe_profile = "".join(ch for ch in profile if ch.isalnum() or ch in ("-", "_"))
+    if not safe_profile:
+        print(f"[配置] 忽略无效 DAILYANA_PROFILE: {profile}")
+        return {}
+
+    profile_path = Path(config_path).parent / "profiles" / f"{safe_profile}.yaml"
+    if not profile_path.exists():
+        print(f"[配置] Profile 未找到: {profile_path}，使用主配置")
+        return {}
+
+    with open(profile_path, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+    print(f"[配置] Profile 加载成功: {profile_path}")
+    return data
 
 
 def _load_app_config(config_data: Dict) -> Dict:
@@ -550,6 +587,9 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
         config_data = yaml.safe_load(f)
 
     print(f"配置文件加载成功: {config_path}")
+    profile_override = _load_profile_override(config_path)
+    if profile_override:
+        config_data = _deep_merge_config(config_data, profile_override)
 
     # 合并所有配置
     config = {}
