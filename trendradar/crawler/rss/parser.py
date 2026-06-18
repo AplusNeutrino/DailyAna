@@ -207,7 +207,7 @@ class RSSParser:
         import requests
 
         response = requests.get(url, timeout=timeout, headers={
-            "User-Agent": "TrendRadar/2.0 RSS Reader"
+            "User-Agent": "RavenisCore/2.0 RSS Reader"
         })
         response.raise_for_status()
 
