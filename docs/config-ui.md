@@ -20,7 +20,10 @@ http://127.0.0.1:8765
 - 添加、查找、编辑、删除热榜平台源。
 - 添加、查找、编辑、删除 RSS 源。
 - 添加、查找、编辑、删除关键词组。
+- 按 `前沿`、`休闲`、`时事` 三类折叠查看所有平台、RSS 和关键词组。
+- 给平台、RSS、关键词组勾选一个或多个内容分类。
 - 单独调整 `work` 和 `relax` 两套推送方案。
+- 给每套推送方案勾选要启用的内容分类。
 - 调整热榜、RSS、AI 分析、新增热点、独立展示区是否显示。
 - 调整 AI 分析是否包含 RSS、standalone、排名轨迹。
 - 预留历史新闻搜索接口：`/api/history/search?q=关键词`。
@@ -47,6 +50,20 @@ config/profiles/relax.yaml
 ```
 
 运行时会先读取 `config/config.yaml`，再用对应 profile 覆盖同名字段。
+
+每个 profile 的 `content.selected_categories` 决定该次推送启用哪些内容分类。分类清单位于：
+
+```text
+config/content_categories.yaml
+```
+
+默认分类：
+
+- `frontier`：前沿，主要是 AI、数据、科技、产业与前沿公司。
+- `leisure`：休闲，游戏、影视、泛娱乐与轻内容。
+- `current_events`：时事，国内外公共事件、宏观动态与综合新闻。
+
+如果某个 profile 明确设置了空的 `selected_categories: []`，则该次推送不会启用任何分类内容。
 
 ## 数据库接口预留
 
