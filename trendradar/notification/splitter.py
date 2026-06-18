@@ -6,6 +6,7 @@
 """
 
 from datetime import datetime
+import re
 from typing import Dict, List, Optional, Callable
 
 from trendradar.report.formatter import format_title_for_platform
@@ -118,6 +119,100 @@ def _safe_new_batch(
     if last.endswith(footer):
         return last[: -len(footer)]
     return last
+
+
+def _format_compact_title_for_platform(
+    platform: str, title_data: Dict, show_source: bool = True, show_keyword: bool = False
+) -> str:
+    """Render one compact bullet item: source/keyword + title, without rank/time/count."""
+    title = (title_data.get("title") or "").strip()
+    link_url = title_data.get("mobile_url") or title_data.get("url") or ""
+    source = title_data.get("source_name") or title_data.get("source") or title_data.get("feed_name") or ""
+    keyword = title_data.get("matched_keyword", "") if show_keyword else ""
+    prefix = ""
+
+    if show_source and source:
+        prefix = f"[{source}] "
+    elif show_keyword and keyword:
+        prefix = f"[{keyword}] "
+
+    if link_url:
+        if platform == "telegram":
+            rendered_title = f'<a href="{link_url}">{title}</a>'
+        else:
+            rendered_title = f"[{title}]({link_url})"
+    else:
+        rendered_title = title
+
+    if title_data.get("is_new"):
+        prefix += "🆕 "
+
+    return f"{prefix}{rendered_title}"
+
+
+def _plain_ai_line(line: str) -> str:
+    """Strip common markdown/html wrappers for the compact AI brief."""
+    line = re.sub(r"<[^>]+>", "", line)
+    line = re.sub(r"^\s*#+\s*", "", line)
+    line = re.sub(r"^\s*[-*]\s*", "", line)
+    line = re.sub(r"\*\*([^*]+)\*\*", r"\1", line)
+    line = re.sub(r"\*([^*]+)\*", r"\1", line)
+    return line.strip()
+
+
+def _render_ai_brief(format_type: str, ai_content: Optional[str], max_items: int = 4) -> str:
+    """Build a short front-loaded AI brief from the full AI analysis text."""
+    if not ai_content:
+        return ""
+
+    lines = [_plain_ai_line(line) for line in ai_content.splitlines()]
+    lines = [line for line in lines if line]
+
+    skip_headings = {
+        "✨ AI 热点分析",
+        "AI 热点分析",
+        "核心热点态势",
+        "舆论风向争议",
+        "异动与弱信号",
+        "RSS 深度洞察",
+        "研判策略建议",
+        "独立源点速览",
+    }
+
+    brief_items = []
+    in_core_section = False
+    for line in lines:
+        normalized = line.strip()
+        if normalized in ("核心热点态势",):
+            in_core_section = True
+            continue
+        if in_core_section and normalized in skip_headings - {"核心热点态势"}:
+            break
+        if normalized in skip_headings:
+            continue
+        if in_core_section:
+            brief_items.append(normalized)
+        if len(brief_items) >= max_items:
+            break
+
+    if not brief_items:
+        for line in lines:
+            if line not in skip_headings:
+                brief_items.append(line)
+            if len(brief_items) >= max_items:
+                break
+
+    if not brief_items:
+        return ""
+
+    if format_type == "slack":
+        title = "*⚡ AI 快讯*"
+    elif format_type == "telegram":
+        title = "⚡ AI 快讯"
+    else:
+        title = "**⚡ AI 快讯**"
+
+    return title + "\n\n" + "\n".join(f"- {item}" for item in brief_items)
 
 
 # 默认批次大小配置
@@ -300,10 +395,8 @@ def split_content_into_batches(
         topics = " | ".join(f"{s['word']}({s['count']})" for s in top_words)
         base_header += f"{b_s}最热话题：{b_e} {topics}\n"
 
-    if format_type in ("feishu", "dingtalk"):
-        base_header += "\n---\n\n"
-    else:
-        base_header += "\n"
+    metadata_footer = base_header.strip()
+    base_header = ""
 
     base_footer = ""
     if format_type in ("wework", "bark"):
@@ -330,6 +423,16 @@ def split_content_into_batches(
         base_footer = f"\n\n_更新时间：{now.strftime('%Y-%m-%d %H:%M:%S')}_"
         if update_info:
             base_footer += f"\n_TrendRadar 发现新版本 *{update_info['remote_version']}*，当前 *{update_info['current_version']}_"
+
+    if metadata_footer:
+        if format_type in ("feishu", "dingtalk"):
+            base_footer = f"\n\n---\n\n**运行信息**\n{metadata_footer}" + base_footer
+        elif format_type == "slack":
+            base_footer = f"\n\n*运行信息*\n{metadata_footer}" + base_footer
+        elif format_type == "telegram":
+            base_footer = f"\n\n运行信息\n{metadata_footer}" + base_footer
+        else:
+            base_footer = f"\n\n\n**运行信息**\n{metadata_footer}" + base_footer
 
     # 根据 display_mode 选择统计标题
     stats_title = "热点词汇统计" if display_mode == "keyword" else "热点新闻统计"
@@ -486,36 +589,10 @@ def split_content_into_batches(
             first_news_line = ""
             if stat["titles"]:
                 first_title_data = stat["titles"][0]
-                if format_type in ("wework", "bark"):
-                    formatted_title = format_title_for_platform(
-                        "wework", first_title_data, show_source=show_source, show_keyword=show_keyword
-                    )
-                elif format_type == "telegram":
-                    formatted_title = format_title_for_platform(
-                        "telegram", first_title_data, show_source=show_source, show_keyword=show_keyword
-                    )
-                elif format_type == "ntfy":
-                    formatted_title = format_title_for_platform(
-                        "ntfy", first_title_data, show_source=show_source, show_keyword=show_keyword
-                    )
-                elif format_type == "feishu":
-                    formatted_title = format_title_for_platform(
-                        "feishu", first_title_data, show_source=show_source, show_keyword=show_keyword
-                    )
-                elif format_type == "dingtalk":
-                    formatted_title = format_title_for_platform(
-                        "dingtalk", first_title_data, show_source=show_source, show_keyword=show_keyword
-                    )
-                elif format_type == "slack":
-                    formatted_title = format_title_for_platform(
-                        "slack", first_title_data, show_source=show_source, show_keyword=show_keyword
-                    )
-                else:
-                    formatted_title = f"{first_title_data['title']}"
-
-                first_news_line = f"  1. {formatted_title}\n"
-                if len(stat["titles"]) > 1:
-                    first_news_line += "\n"
+                formatted_title = _format_compact_title_for_platform(
+                    format_type, first_title_data, show_source=show_source, show_keyword=show_keyword
+                )
+                first_news_line = f"  - {formatted_title}\n"
 
             # 原子性检查：词组标题+第一条新闻必须一起处理
             word_with_first_news = word_header + first_news_line
@@ -541,36 +618,10 @@ def split_content_into_batches(
             # 处理剩余新闻条目
             for j in range(start_index, len(stat["titles"])):
                 title_data = stat["titles"][j]
-                if format_type in ("wework", "bark"):
-                    formatted_title = format_title_for_platform(
-                        "wework", title_data, show_source=show_source, show_keyword=show_keyword
-                    )
-                elif format_type == "telegram":
-                    formatted_title = format_title_for_platform(
-                        "telegram", title_data, show_source=show_source, show_keyword=show_keyword
-                    )
-                elif format_type == "ntfy":
-                    formatted_title = format_title_for_platform(
-                        "ntfy", title_data, show_source=show_source, show_keyword=show_keyword
-                    )
-                elif format_type == "feishu":
-                    formatted_title = format_title_for_platform(
-                        "feishu", title_data, show_source=show_source, show_keyword=show_keyword
-                    )
-                elif format_type == "dingtalk":
-                    formatted_title = format_title_for_platform(
-                        "dingtalk", title_data, show_source=show_source, show_keyword=show_keyword
-                    )
-                elif format_type == "slack":
-                    formatted_title = format_title_for_platform(
-                        "slack", title_data, show_source=show_source, show_keyword=show_keyword
-                    )
-                else:
-                    formatted_title = f"{title_data['title']}"
-
-                news_line = f"  {j + 1}. {formatted_title}\n"
-                if j < len(stat["titles"]) - 1:
-                    news_line += "\n"
+                formatted_title = _format_compact_title_for_platform(
+                    format_type, title_data, show_source=show_source, show_keyword=show_keyword
+                )
+                news_line = f"  - {formatted_title}\n"
 
                 test_content = current_batch + news_line
                 if (
@@ -878,6 +929,21 @@ def split_content_into_batches(
     # 记录是否已有区域内容（用于决定是否添加分割线）
     has_region_content = False
 
+    # Front-load a compact AI brief. The full AI analysis still appears later
+    # according to region_order, so this is only a quick reading layer.
+    ai_brief = _render_ai_brief(format_type, ai_content)
+    if ai_brief:
+        test_content = current_batch + ai_brief
+        if len(test_content.encode("utf-8")) + len(base_footer.encode("utf-8")) < max_bytes:
+            current_batch = test_content
+            current_batch_has_content = True
+        else:
+            current_batch = _safe_new_batch(
+                base_header + ai_brief, base_footer, max_bytes, base_header, batches
+            )
+            current_batch_has_content = True
+        has_region_content = True
+
     for region in region_order:
         # 记录处理前的状态，用于判断该区域是否产生了内容
         batch_before = current_batch
@@ -1128,24 +1194,10 @@ def _process_rss_stats_section(
         first_news_line = ""
         if stat["titles"]:
             first_title_data = stat["titles"][0]
-            if format_type in ("wework", "bark"):
-                formatted_title = format_title_for_platform("wework", first_title_data, show_source=True)
-            elif format_type == "telegram":
-                formatted_title = format_title_for_platform("telegram", first_title_data, show_source=True)
-            elif format_type == "ntfy":
-                formatted_title = format_title_for_platform("ntfy", first_title_data, show_source=True)
-            elif format_type == "feishu":
-                formatted_title = format_title_for_platform("feishu", first_title_data, show_source=True)
-            elif format_type == "dingtalk":
-                formatted_title = format_title_for_platform("dingtalk", first_title_data, show_source=True)
-            elif format_type == "slack":
-                formatted_title = format_title_for_platform("slack", first_title_data, show_source=True)
-            else:
-                formatted_title = f"{first_title_data['title']}"
-
-            first_news_line = f"  1. {formatted_title}\n"
-            if len(stat["titles"]) > 1:
-                first_news_line += "\n"
+            formatted_title = _format_compact_title_for_platform(
+                format_type, first_title_data, show_source=True
+            )
+            first_news_line = f"  - {formatted_title}\n"
 
         # 原子性检查：关键词标题 + 第一条新闻必须一起处理
         word_with_first_news = word_header + first_news_line
@@ -1168,24 +1220,10 @@ def _process_rss_stats_section(
         # 处理剩余新闻条目
         for j in range(start_index, len(stat["titles"])):
             title_data = stat["titles"][j]
-            if format_type in ("wework", "bark"):
-                formatted_title = format_title_for_platform("wework", title_data, show_source=True)
-            elif format_type == "telegram":
-                formatted_title = format_title_for_platform("telegram", title_data, show_source=True)
-            elif format_type == "ntfy":
-                formatted_title = format_title_for_platform("ntfy", title_data, show_source=True)
-            elif format_type == "feishu":
-                formatted_title = format_title_for_platform("feishu", title_data, show_source=True)
-            elif format_type == "dingtalk":
-                formatted_title = format_title_for_platform("dingtalk", title_data, show_source=True)
-            elif format_type == "slack":
-                formatted_title = format_title_for_platform("slack", title_data, show_source=True)
-            else:
-                formatted_title = f"{title_data['title']}"
-
-            news_line = f"  {j + 1}. {formatted_title}\n"
-            if j < len(stat["titles"]) - 1:
-                news_line += "\n"
+            formatted_title = _format_compact_title_for_platform(
+                format_type, title_data, show_source=True
+            )
+            news_line = f"  - {formatted_title}\n"
 
             test_content = current_batch + news_line
             if len(test_content.encode("utf-8")) + len(base_footer.encode("utf-8")) >= max_bytes:
