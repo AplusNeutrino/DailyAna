@@ -15,5 +15,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh workflow disable crawler.yml --repo "${{ github.repository }}"
-          gh workflow disable crawler-weekend.yml --repo "${{ github.repository }}"
+          gh workflow disable crawler-relax.yml --repo "${{ github.repository }}"
           echo "DailyAna scheduled crawlers have been turned off."
