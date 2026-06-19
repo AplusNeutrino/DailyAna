@@ -196,6 +196,17 @@ def _load_notification_config(config_data: Dict) -> Dict:
     notification = config_data.get("notification", {})
     advanced = config_data.get("advanced", {})
     batch_size = advanced.get("batch_size", {})
+    intelligence_push = dict(config_data.get("intelligence_push", {}))
+    intelligence_enabled_env = _get_env_bool("INTELLIGENCE_PUSH_ENABLED")
+    if intelligence_enabled_env is not None:
+        intelligence_push["enabled"] = intelligence_enabled_env
+    intelligence_push.setdefault("slots", config_data.get("slots", {}))
+    intelligence_push.setdefault("categories", config_data.get("categories", []))
+    intelligence_push.setdefault("intents", config_data.get("intents", []))
+    intelligence_push.setdefault("scoring", config_data.get("scoring", {}))
+    intelligence_storage = dict(config_data.get("storage", {}))
+    intelligence_storage.update(intelligence_push.get("storage", {}))
+    intelligence_push["storage"] = intelligence_storage
 
     return {
         "ENABLE_NOTIFICATION": notification.get("enabled", True),
@@ -207,6 +218,8 @@ def _load_notification_config(config_data: Dict) -> Dict:
         "BATCH_SEND_INTERVAL": advanced.get("batch_send_interval", 1.0),
         "FEISHU_MESSAGE_SEPARATOR": advanced.get("feishu_message_separator", "---"),
         "MAX_ACCOUNTS_PER_CHANNEL": _get_env_int("MAX_ACCOUNTS_PER_CHANNEL") or advanced.get("max_accounts_per_channel", 3),
+        "MESSAGE_PLAN": notification.get("message_plan", {}),
+        "INTELLIGENCE_PUSH": intelligence_push,
     }
 
 

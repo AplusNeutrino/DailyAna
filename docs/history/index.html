@@ -21,6 +21,8 @@
     .pill { display:inline-flex; padding:2px 8px; border-radius:999px; background:#edf2f7; color:#42526b; font-size:12px; }
     .pill.rss { background:#fff4e5; color:#93370d; }
     .pill.hotlist { background:#e8efff; color:#003eb3; }
+    .pill.intelligence { background:#e7f8ee; color:#05603a; }
+    .pill.cluster { background:#f2eafd; color:#5925dc; }
     .item { display:grid; gap:6px; padding:13px 0; border-bottom:1px solid var(--line); }
     .item:last-child { border-bottom:0; }
     .item-title { color:#0f1728; font-weight:700; text-decoration:none; }
@@ -51,6 +53,8 @@
             <option value="">全部</option>
             <option value="hotlist">热榜</option>
             <option value="rss">RSS</option>
+            <option value="intelligence">编号新闻</option>
+            <option value="cluster">事件簇</option>
           </select>
         </div>
         <div>
@@ -132,13 +136,23 @@
         <article class="item">
           <a class="item-title" href="${esc(item.url || '#')}" target="_blank" rel="noopener noreferrer">${esc(item.title)}</a>
           <div class="meta">
-            <span class="pill ${esc(item.type)}">${item.type === 'rss' ? 'RSS' : '热榜'}</span>
+            <span class="pill ${esc(item.type)}">${typeLabel(item.type)}</span>
+            ${item.short_id ? `<span>${esc(item.short_id)}</span>` : ''}
+            ${item.category ? `<span>${esc(item.category)}</span>` : ''}
+            ${item.score ? `<span>${esc(item.score)}分</span>` : ''}
             <span>${esc(item.source || item.source_id)}</span>
             <span>${esc(item.date)}</span>
             ${item.published_at ? `<span>${esc(item.published_at)}</span>` : ''}
           </div>
         </article>
       `).join('');
+    }
+
+    function typeLabel(type) {
+      if (type === 'rss') return 'RSS';
+      if (type === 'intelligence') return '编号新闻';
+      if (type === 'cluster') return '事件簇';
+      return '热榜';
     }
 
     ['q', 'type', 'source', 'limit'].forEach(id => $(id).addEventListener('input', render));

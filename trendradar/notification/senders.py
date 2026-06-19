@@ -18,19 +18,25 @@
 import smtplib
 import time
 import json
+from copy import deepcopy
 from datetime import datetime
 from email.header import Header
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import formataddr, formatdate, make_msgid
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import urlparse
 
 import requests
 
 from .batch import add_batch_headers, get_max_batch_header_size
 from .formatters import convert_markdown_to_mrkdwn, strip_markdown
+from trendradar.intelligence import (
+    archive_intelligence_to_r2,
+    build_intelligence_package,
+    render_wechat_intelligence_messages,
+)
 
 
 def _extract_ai_stats(ai_analysis) -> Optional[Dict]:
@@ -63,6 +69,209 @@ def _render_ai_analysis(ai_analysis: Any, channel: str) -> str:
         return renderer(ai_analysis)
     except ImportError:
         return ""
+
+
+PLAN_SECTION_ALIASES = {
+    "brief": "ai_brief",
+    "summary": "ai_brief",
+    "quick_summary": "ai_brief",
+    "ai_brief": "ai_brief",
+    "top_hotlist": "hotlist",
+    "hotlist": "hotlist",
+    "rss": "rss",
+    "rss_sources": "rss",
+    "new_items": "new_items",
+    "new": "new_items",
+    "standalone": "standalone",
+    "ai": "ai_analysis",
+    "ai_analysis": "ai_analysis",
+    "full_analysis": "ai_analysis",
+}
+
+PLAN_REGION_SECTIONS = {"hotlist", "rss", "new_items", "standalone", "ai_analysis"}
+
+
+def _as_int(value: Any, default: Optional[int] = None) -> Optional[int]:
+    try:
+        if value in (None, ""):
+            return default
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _message_plan_entries(message_plan: Optional[Dict], channel: str) -> List[Dict]:
+    """Return enabled message plan entries for a channel."""
+    if not isinstance(message_plan, dict) or not message_plan.get("enabled", False):
+        return []
+
+    raw_entries = message_plan.get(channel) or message_plan.get("default") or []
+    if isinstance(raw_entries, dict):
+        raw_entries = raw_entries.get("messages", [])
+    if not isinstance(raw_entries, list):
+        return []
+
+    return [
+        entry for entry in raw_entries
+        if isinstance(entry, dict) and entry.get("enabled", True)
+    ]
+
+
+def _normalize_plan_sections(entry: Dict) -> List[str]:
+    raw_sections = entry.get("sections") or entry.get("regions") or []
+    if isinstance(raw_sections, str):
+        raw_sections = [x.strip() for x in raw_sections.split(",")]
+    if not isinstance(raw_sections, list):
+        raw_sections = []
+
+    sections = []
+    for item in raw_sections:
+        normalized = PLAN_SECTION_ALIASES.get(str(item).strip().lower())
+        if normalized and normalized not in sections:
+            sections.append(normalized)
+
+    return sections or ["hotlist", "rss", "new_items", "standalone", "ai_analysis"]
+
+
+def _limit_grouped_titles(groups: Optional[List[Dict]], max_items: Optional[int]) -> Optional[List[Dict]]:
+    if groups is None or not max_items or max_items <= 0:
+        return groups
+
+    limited = []
+    remaining = max_items
+    for group in groups:
+        titles = list(group.get("titles", []))
+        if not titles or remaining <= 0:
+            continue
+        copy_group = deepcopy(group)
+        copy_group["titles"] = titles[:remaining]
+        copy_group["count"] = len(copy_group["titles"])
+        limited.append(copy_group)
+        remaining -= len(copy_group["titles"])
+    return limited
+
+
+def _limit_standalone_data(data: Optional[Dict], max_items: Optional[int]) -> Optional[Dict]:
+    if data is None or not max_items or max_items <= 0:
+        return data
+
+    limited = deepcopy(data)
+    remaining = max_items
+    for key in ("platforms", "rss_feeds"):
+        next_groups = []
+        for group in limited.get(key, []):
+            items = list(group.get("items", []))
+            if not items or remaining <= 0:
+                continue
+            copy_group = deepcopy(group)
+            copy_group["items"] = items[:remaining]
+            next_groups.append(copy_group)
+            remaining -= len(copy_group["items"])
+        limited[key] = next_groups
+    return limited
+
+
+def _report_for_plan_sections(report_data: Dict, sections: List[str], max_items: Optional[int]) -> Dict:
+    section_set = set(sections)
+    planned = deepcopy(report_data)
+
+    if "hotlist" in section_set:
+        planned["stats"] = _limit_grouped_titles(deepcopy(report_data.get("stats", [])), max_items) or []
+    else:
+        planned["stats"] = []
+        planned["hotlist_total"] = 0
+        planned["platform_total"] = 0
+
+    if "new_items" in section_set:
+        planned["new_titles"] = _limit_grouped_titles(deepcopy(report_data.get("new_titles", [])), max_items) or []
+        planned["total_new_count"] = sum(len(group.get("titles", [])) for group in planned["new_titles"])
+    else:
+        planned["new_titles"] = []
+        planned["total_new_count"] = 0
+
+    if "rss" not in section_set:
+        planned["rss_matched_count"] = 0
+        planned["rss_total_count"] = 0
+        planned["rss_source_total"] = 0
+        planned["rss_source_failed"] = 0
+
+    planned["failed_ids"] = deepcopy(report_data.get("failed_ids", [])) if "failed" in section_set else []
+    return planned
+
+
+def _prepend_plan_title(batch: str, title: str, msg_type: str) -> str:
+    title = (title or "").strip()
+    if not title:
+        return batch
+    if msg_type.lower() == "text":
+        return f"{title}\n\n{batch}"
+    return f"**{title}**\n\n{batch}"
+
+
+def _build_message_plan_batches(
+    *,
+    message_plan: Optional[Dict],
+    channel: str,
+    msg_type: str,
+    split_content_func: Callable,
+    report_data: Dict,
+    report_type: str,
+    update_info: Optional[Dict],
+    mode: str,
+    batch_size: int,
+    header_reserve: int,
+    rss_items: Optional[list],
+    rss_new_items: Optional[list],
+    ai_content: Optional[str],
+    ai_stats: Optional[Dict],
+    standalone_data: Optional[Dict],
+) -> List[str]:
+    entries = _message_plan_entries(message_plan, channel)
+    if not entries:
+        return []
+
+    planned_batches = []
+    for index, entry in enumerate(entries, 1):
+        sections = _normalize_plan_sections(entry)
+        region_order = [section for section in sections if section in PLAN_REGION_SECTIONS]
+        max_items = _as_int(entry.get("max_items"), None)
+        entry_batch_size = _as_int(entry.get("max_bytes"), batch_size) or batch_size
+        title = entry.get("title") or entry.get("name") or f"Message {index}"
+        title_prefix_size = len(_prepend_plan_title("", title, msg_type).encode("utf-8"))
+        content_max_bytes = max(500, entry_batch_size - header_reserve - title_prefix_size)
+
+        include_ai_brief = "ai_brief" in sections
+        include_ai_analysis = "ai_analysis" in sections
+        section_ai_content = ai_content if (include_ai_brief or include_ai_analysis) else None
+        section_ai_stats = ai_stats if section_ai_content else None
+
+        planned_report = _report_for_plan_sections(report_data, sections, max_items)
+        planned_rss_items = _limit_grouped_titles(deepcopy(rss_items), max_items) if "rss" in sections else None
+        planned_rss_new_items = _limit_grouped_titles(deepcopy(rss_new_items), max_items) if "new_items" in sections else None
+        planned_standalone = _limit_standalone_data(deepcopy(standalone_data), max_items) if "standalone" in sections else None
+
+        part_batches = split_content_func(
+            planned_report,
+            "wework",
+            update_info,
+            max_bytes=content_max_bytes,
+            mode=mode,
+            rss_items=planned_rss_items,
+            rss_new_items=planned_rss_new_items,
+            ai_content=section_ai_content,
+            standalone_data=planned_standalone,
+            ai_stats=section_ai_stats,
+            report_type=report_type,
+            region_order=region_order,
+            include_ai_brief=include_ai_brief,
+            show_new_section="new_items" in sections,
+        )
+
+        for batch in part_batches:
+            if batch.strip():
+                planned_batches.append(_prepend_plan_title(batch, title, msg_type))
+
+    return planned_batches
 
 
 # === SMTP 邮件配置 ===
@@ -356,6 +565,8 @@ def send_to_wework(
     batch_interval: float = 1.0,
     msg_type: str = "markdown",
     split_content_func: Callable = None,
+    message_plan: Optional[Dict] = None,
+    intelligence_config: Optional[Dict] = None,
     rss_items: Optional[list] = None,
     rss_new_items: Optional[list] = None,
     ai_analysis: Any = None,
@@ -408,15 +619,35 @@ def send_to_wework(
 
     # 获取分批内容，预留批次头部空间
     header_reserve = get_max_batch_header_size(header_format_type)
-    batches = split_content_func(
-        report_data, "wework", update_info, max_bytes=batch_size - header_reserve, mode=mode,
+    batches = _build_message_plan_batches(
+        message_plan=message_plan,
+        channel="wework",
+        msg_type=msg_type,
+        split_content_func=split_content_func,
+        report_data=report_data,
+        report_type=report_type,
+        update_info=update_info,
+        mode=mode,
+        batch_size=batch_size,
+        header_reserve=header_reserve,
         rss_items=rss_items,
         rss_new_items=rss_new_items,
         ai_content=ai_content,
-        standalone_data=standalone_data,
         ai_stats=ai_stats,
-        report_type=report_type,
+        standalone_data=standalone_data,
     )
+    if batches:
+        print(f"{log_prefix}使用 message_plan 自定义分条 [{report_type}]")
+    else:
+        batches = split_content_func(
+            report_data, "wework", update_info, max_bytes=batch_size - header_reserve, mode=mode,
+            rss_items=rss_items,
+            rss_new_items=rss_new_items,
+            ai_content=ai_content,
+            standalone_data=standalone_data,
+            ai_stats=ai_stats,
+            report_type=report_type,
+        )
 
     # 统一添加批次头部（已预留空间，不会超限）
     batches = add_batch_headers(batches, header_format_type, batch_size)
@@ -467,6 +698,131 @@ def send_to_wework(
 
     print(f"{log_prefix}所有 {len(batches)} 批次发送完成 [{report_type}]")
 
+    return True
+
+
+def send_to_wework(
+    webhook_url: str,
+    report_data: Dict,
+    report_type: str,
+    update_info: Optional[Dict] = None,
+    proxy_url: Optional[str] = None,
+    mode: str = "daily",
+    account_label: str = "",
+    *,
+    batch_size: int = 4000,
+    batch_interval: float = 1.0,
+    msg_type: str = "markdown",
+    split_content_func: Callable = None,
+    message_plan: Optional[Dict] = None,
+    intelligence_config: Optional[Dict] = None,
+    rss_items: Optional[list] = None,
+    rss_new_items: Optional[list] = None,
+    ai_analysis: Any = None,
+    display_regions: Optional[Dict] = None,
+    standalone_data: Optional[Dict] = None,
+) -> bool:
+    """Send WeWork messages, preferring Ravenis intelligence logical batches."""
+    headers = {"Content-Type": "application/json"}
+    proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else None
+    log_prefix = f"企业微信{account_label}" if account_label else "企业微信"
+    is_text_mode = msg_type.lower() == "text"
+    header_format_type = "wework_text" if is_text_mode else "wework"
+
+    ai_content = _render_ai_analysis(ai_analysis, "wework") if ai_analysis else None
+    ai_stats = _extract_ai_stats(ai_analysis)
+    header_reserve = get_max_batch_header_size(header_format_type)
+
+    logical_batches = False
+    batches: List[str] = []
+    if isinstance(intelligence_config, dict) and intelligence_config.get("enabled", False):
+        try:
+            package = build_intelligence_package(
+                report_data=report_data,
+                rss_items=rss_items,
+                rss_new_items=rss_new_items,
+                standalone_data=standalone_data,
+                now=datetime.now(),
+                config=intelligence_config,
+            )
+            batches = render_wechat_intelligence_messages(
+                package, intelligence_config, max_bytes=batch_size
+            )
+            archive_intelligence_to_r2(package, batches, intelligence_config)
+            logical_batches = bool(batches)
+            print(f"{log_prefix}使用 intelligence_push 逻辑分条 [{report_type}]")
+        except Exception as exc:
+            print(f"{log_prefix} intelligence_push 失败，回退原推送：{exc}")
+
+    if not batches:
+        batches = _build_message_plan_batches(
+            message_plan=message_plan,
+            channel="wework",
+            msg_type=msg_type,
+            split_content_func=split_content_func,
+            report_data=report_data,
+            report_type=report_type,
+            update_info=update_info,
+            mode=mode,
+            batch_size=batch_size,
+            header_reserve=header_reserve,
+            rss_items=rss_items,
+            rss_new_items=rss_new_items,
+            ai_content=ai_content,
+            ai_stats=ai_stats,
+            standalone_data=standalone_data,
+        )
+        if batches:
+            print(f"{log_prefix}使用 message_plan 自定义分条 [{report_type}]")
+
+    if not batches:
+        if split_content_func is None:
+            print(f"{log_prefix}发送失败：缺少 split_content_func [{report_type}]")
+            return False
+        batches = split_content_func(
+            report_data,
+            "wework",
+            update_info,
+            max_bytes=batch_size - header_reserve,
+            mode=mode,
+            rss_items=rss_items,
+            rss_new_items=rss_new_items,
+            ai_content=ai_content,
+            standalone_data=standalone_data,
+            ai_stats=ai_stats,
+            report_type=report_type,
+        )
+
+    if not logical_batches:
+        batches = add_batch_headers(batches, header_format_type, batch_size)
+
+    print(f"{log_prefix}消息分为 {len(batches)} 条发送 [{report_type}]")
+    for i, batch_content in enumerate(batches, 1):
+        if is_text_mode:
+            content = strip_markdown(batch_content)
+            payload = {"msgtype": "text", "text": {"content": content}}
+        else:
+            content = batch_content
+            payload = {"msgtype": "markdown", "markdown": {"content": content}}
+        print(f"发送{log_prefix}第 {i}/{len(batches)} 条，大小：{len(content.encode('utf-8'))} 字节 [{report_type}]")
+        try:
+            response = requests.post(
+                webhook_url, headers=headers, json=payload, proxies=proxies, timeout=30
+            )
+            if response.status_code != 200:
+                print(f"{log_prefix}第 {i}/{len(batches)} 条发送失败 [{report_type}]，状态码：{response.status_code}")
+                return False
+            result = response.json()
+            if result.get("errcode") != 0:
+                print(f"{log_prefix}第 {i}/{len(batches)} 条发送失败 [{report_type}]，错误：{result.get('errmsg')}")
+                return False
+            if i < len(batches):
+                time.sleep(batch_interval)
+        except Exception as exc:
+            print(f"{log_prefix}第 {i}/{len(batches)} 条发送出错 [{report_type}]：{exc}")
+            return False
+
+    print(f"{log_prefix}所有 {len(batches)} 条发送完成 [{report_type}]")
     return True
 
 

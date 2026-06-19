@@ -84,6 +84,7 @@ jobs:
           S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
           S3_ENDPOINT_URL: ${{ secrets.S3_ENDPOINT_URL }}
           S3_REGION: ${{ secrets.S3_REGION }}
+          INTELLIGENCE_PUSH_ENABLED: ${{ secrets.INTELLIGENCE_PUSH_ENABLED }}
           GITHUB_ACTIONS: true
           DAILYANA_PROFILE: relax
         run: uv run python -m trendradar

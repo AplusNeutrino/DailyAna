@@ -501,6 +501,8 @@ class NotificationDispatcher:
                 batch_interval=self.config.get("BATCH_SEND_INTERVAL", 1.0),
                 msg_type=self.config.get("WEWORK_MSG_TYPE", "markdown"),
                 split_content_func=self.split_content_func,
+                message_plan=self.config.get("MESSAGE_PLAN", {}),
+                intelligence_config=self.config.get("INTELLIGENCE_PUSH", {}),
                 rss_items=ri,
                 rss_new_items=rn,
                 ai_analysis=ai,
@@ -799,4 +801,3 @@ class NotificationDispatcher:
             custom_smtp_port=self.config.get("EMAIL_SMTP_PORT", ""),
             get_time_func=self.get_time_func,
         )
-

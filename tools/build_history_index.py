@@ -28,6 +28,8 @@ except ImportError:  # pragma: no cover - handled at runtime in Actions
 
 
 DATE_RE = re.compile(r"^(news|rss)/(\d{4}-\d{2}-\d{2})\.db$")
+NEWS_JSON_RE = re.compile(r"^news/(\d{4})/(\d{2})/(\d{2})/([A-Z])/([^/]+)\.json$")
+CLUSTER_JSON_RE = re.compile(r"^clusters/(\d{4})/(\d{2})/(\d{2})/([A-Z])/([^/]+)\.json$")
 
 
 def utc_now() -> datetime:
@@ -80,6 +82,23 @@ def list_db_keys(client, bucket: str) -> list[tuple[str, str, str]]:
     return keys
 
 
+def list_intelligence_json_keys(client, bucket: str) -> list[tuple[str, str, str]]:
+    keys: list[tuple[str, str, str]] = []
+    paginator = client.get_paginator("list_objects_v2")
+    for prefix, kind, pattern in (
+        ("news/", "intelligence_news", NEWS_JSON_RE),
+        ("clusters/", "intelligence_cluster", CLUSTER_JSON_RE),
+    ):
+        for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+            for obj in page.get("Contents", []):
+                key = obj.get("Key", "")
+                match = pattern.match(key)
+                if match:
+                    date_str = f"{match.group(1)}-{match.group(2)}-{match.group(3)}"
+                    keys.append((key, kind, date_str))
+    return keys
+
+
 def download_object(client, bucket: str, key: str, target: Path) -> bool:
     target.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -101,15 +120,72 @@ def add_item(items: list[dict[str, Any]], seen: set[str], item: dict[str, Any]) 
     url = normalize_url(item.get("url", ""))
     title = (item.get("title") or "").strip()
     source_id = item.get("source_id") or ""
-    dedupe_key = url or f"{item.get('type')}|{source_id}|{title}"
+    dedupe_key = item.get("id") or url or f"{item.get('type')}|{source_id}|{title}"
     if not title or dedupe_key in seen:
         return
     seen.add(dedupe_key)
     item["search_text"] = " ".join(
         str(item.get(key, ""))
-        for key in ("date", "title", "source", "source_id", "type")
+        for key in ("id", "short_id", "date", "title", "source", "source_id", "type", "category", "cluster_id")
     ).lower()
+    item["search_text"] += " " + " ".join(item.get("tags", []) or []).lower()
+    item["search_text"] += " " + " ".join(item.get("intent", []) or []).lower()
     items.append(item)
+
+
+def extract_intelligence_json(local_path: Path, date_str: str, kind: str,
+                              items: list[dict[str, Any]], seen: set[str]) -> None:
+    try:
+        data = json.loads(local_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        print(f"[history] read json failed: {local_path}: {exc}")
+        return
+
+    if kind == "intelligence_news":
+        add_item(items, seen, {
+            "id": data.get("id", ""),
+            "short_id": data.get("short_id", ""),
+            "date": data.get("date") or date_str,
+            "slot": data.get("slot", ""),
+            "type": "intelligence",
+            "title": data.get("title", ""),
+            "source": data.get("source", ""),
+            "source_id": data.get("source_id", ""),
+            "source_type": data.get("source_type", ""),
+            "url": data.get("url", ""),
+            "category": data.get("category", ""),
+            "tags": data.get("tags", []),
+            "intent": data.get("intent", []),
+            "score": data.get("raw_item_score", 0),
+            "cluster_id": data.get("cluster_id", ""),
+            "published_at": data.get("captured_at", ""),
+            "first_seen": data.get("captured_at", ""),
+            "last_seen": data.get("captured_at", ""),
+        })
+        return
+
+    add_item(items, seen, {
+        "id": data.get("cluster_id", ""),
+        "short_id": data.get("short_cluster_id", ""),
+        "date": data.get("date") or date_str,
+        "slot": data.get("slot", ""),
+        "type": "cluster",
+        "title": data.get("title", ""),
+        "source": "Ravenis Core",
+        "source_id": "cluster",
+        "url": "",
+        "category": data.get("category", ""),
+        "tags": data.get("tags", []),
+        "intent": [],
+        "score": data.get("cluster_score", 0),
+        "cluster_id": data.get("cluster_id", ""),
+        "related_item_ids": data.get("related_item_ids", []),
+        "summary": data.get("summary", ""),
+        "observation": data.get("observation", ""),
+        "published_at": data.get("created_at", ""),
+        "first_seen": data.get("created_at", ""),
+        "last_seen": data.get("created_at", ""),
+    })
 
 
 def extract_news(db_path: Path, date_str: str, items: list[dict[str, Any]], seen: set[str]) -> None:
@@ -213,7 +289,9 @@ def build_index(retention_days: int, output: Path, upload_key: str, prune: bool)
     now = utc_now()
     cutoff = (now - timedelta(days=retention_days - 1)).date().isoformat()
     keys = list_db_keys(client, bucket)
+    json_keys = list_intelligence_json_keys(client, bucket)
     recent_keys = [(key, kind, date_str) for key, kind, date_str in keys if date_str >= cutoff]
+    recent_json_keys = [(key, kind, date_str) for key, kind, date_str in json_keys if date_str >= cutoff]
 
     items: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -227,6 +305,11 @@ def build_index(retention_days: int, output: Path, upload_key: str, prune: bool)
                 extract_news(local, date_str, items, seen)
             else:
                 extract_rss(local, date_str, items, seen)
+        for key, kind, date_str in sorted(recent_json_keys, key=lambda x: (x[2], x[1], x[0])):
+            local = tmp_dir / key.replace("/", "_")
+            if not download_object(client, bucket, key, local):
+                continue
+            extract_intelligence_json(local, date_str, kind, items, seen)
 
     items.sort(key=lambda x: (x.get("date", ""), x.get("published_at") or x.get("last_seen") or ""), reverse=True)
     sources = sorted({f"{item['type']}:{item['source_id']}:{item['source']}" for item in items})
@@ -244,8 +327,8 @@ def build_index(retention_days: int, output: Path, upload_key: str, prune: bool)
     if upload_key:
         upload_index(client, bucket, upload_key, output)
     if prune:
-        deleted = prune_remote(client, bucket, keys, cutoff)
-        print(f"[history] pruned {deleted} expired remote db files")
+        deleted = prune_remote(client, bucket, keys + json_keys, cutoff)
+        print(f"[history] pruned {deleted} expired remote history files")
     return len(items)
 
 
