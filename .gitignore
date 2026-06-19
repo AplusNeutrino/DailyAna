@@ -1,0 +1,8 @@
+config/config.yaml
+config/folo-subscriptions.json
+config/config.yaml.bak
+output/
+docs/history/
+__pycache__/
+*.pyc
+.tmp-gh-api/

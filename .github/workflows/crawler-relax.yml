@@ -46,6 +46,28 @@ jobs:
         if: success()
         run: uv sync --frozen --no-dev
 
+      - name: Checkout private runtime config
+        if: success()
+        uses: actions/checkout@v6
+        with:
+          repository: AplusNeutrino/Ravenis-Secrets
+          token: ${{ secrets.RAVENIS_SECRETS_TOKEN }}
+          path: .ravenis-secrets
+
+      - name: Overlay private runtime config
+        if: success()
+        run: |
+          mkdir -p config
+          rsync -a .ravenis-secrets/config/ config/
+          if [ -d .ravenis-secrets/output/news ]; then
+            mkdir -p output/news
+            rsync -a .ravenis-secrets/output/news/ output/news/
+          fi
+          if [ -d .ravenis-secrets/docs/history ]; then
+            mkdir -p docs/history
+            rsync -a .ravenis-secrets/docs/history/ docs/history/
+          fi
+
       - name: Verify required files
         if: success()
         run: |
