@@ -246,3 +246,63 @@ RSS 是最推荐添加的订阅源类型。
 - 关键词：`config/frequency_words.txt`
 - 配置台：`tools/config_ui.py`
 
+## 12. 历史新闻搜索与 R2
+
+GitHub Pages 上的历史搜索台位于：
+
+```text
+https://<你的 GitHub 用户名>.github.io/<仓库名>/history/
+```
+
+如果仓库名仍是 `DailyAna`，默认地址类似：
+
+```text
+https://AplusNeutrino.github.io/DailyAna/history/
+```
+
+历史搜索台是纯静态页面，不保存 R2 密钥。它读取由 GitHub Actions 生成的公开轻量索引：
+
+```text
+docs/history/history-index.json
+```
+
+索引字段只包含：
+
+- 日期
+- 标题
+- 来源平台/来源 RSS
+- 来源 URL
+- 类型：热榜或 RSS
+- 检索用文本
+
+要让 Actions 生成真实历史索引，需要在 GitHub Secrets 中配置：
+
+```text
+S3_BUCKET_NAME
+S3_ACCESS_KEY_ID
+S3_SECRET_ACCESS_KEY
+S3_ENDPOINT_URL
+S3_REGION
+```
+
+Cloudflare R2 的 `S3_REGION` 可以填：
+
+```text
+auto
+```
+
+每次 work/relax workflow 跑完后，会执行：
+
+```text
+tools/build_history_index.py
+```
+
+它会：
+
+- 读取 R2 中最近 30 天的 `news/YYYY-MM-DD.db` 和 `rss/YYYY-MM-DD.db`
+- 生成 `docs/history/history-index.json`
+- 上传一份到 R2 的 `history/history-index.json`
+- 删除 R2 中超过 30 天的每日 SQLite 文件
+- 部署 `docs/` 到 GitHub Pages
+
+如果 R2 secrets 还没配置，搜索台仍会部署，但显示空索引。
