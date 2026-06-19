@@ -94,19 +94,20 @@ def content_hash(title: str, url: str) -> str:
 
 def get_slot(now: datetime, slots: Optional[Dict[str, Any]] = None) -> str:
     configured = slots or {}
-    hour = now.hour
+    minute_of_day = now.hour * 60 + now.minute
     best_slot = ""
-    best_hour = -1
+    best_minute = -1
     for slot, spec in configured.items():
         time_text = _text((spec or {}).get("time"))
-        match = re.match(r"^(\d{1,2}):", time_text)
+        match = re.match(r"^(\d{1,2}):(\d{2})", time_text)
         if match:
-            slot_hour = int(match.group(1))
-            if slot_hour <= hour and slot_hour > best_hour:
+            slot_minute = int(match.group(1)) * 60 + int(match.group(2))
+            if slot_minute <= minute_of_day and slot_minute > best_minute:
                 best_slot = str(slot).upper()
-                best_hour = slot_hour
+                best_minute = slot_minute
     if best_slot:
         return best_slot
+    hour = now.hour
     if hour < 11:
         return "A"
     if hour < 17:
@@ -532,7 +533,15 @@ def render_wechat_intelligence_messages(package: Dict[str, Any], config: Optiona
     trial_clusters = clusters[:max_clusters_trial]
     generated_at = package.get("generated_at", "")
     display_time = generated_at[:16].replace("T", " ") if generated_at else package.get("date", "")
-    header = f"Ravenis Core · Normai Tracking Details\n{display_time} · {package.get('slot')} · 智能新闻速递"
+    slot = str(package.get("slot") or "").upper()
+    slot_spec = (cfg.get("slots") or {}).get(slot, {}) or {}
+    slot_parts = [slot]
+    if slot_spec.get("label"):
+        slot_parts.append(_text(slot_spec.get("label")))
+    if slot_spec.get("time"):
+        slot_parts.append(_text(slot_spec.get("time")))
+    slot_display = "/".join(part for part in slot_parts if part)
+    header = f"Ravenis Core | Normai Tracking Details\n{display_time} | {slot_display} | 智能新闻速递"
 
     msg0 = [header, "", "0. 量子祈坛", "", "今日高权重事件："]
     if not high_clusters:

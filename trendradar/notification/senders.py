@@ -721,6 +721,7 @@ def send_to_wework(
     ai_analysis: Any = None,
     display_regions: Optional[Dict] = None,
     standalone_data: Optional[Dict] = None,
+    get_time_func: Callable = None,
 ) -> bool:
     """Send WeWork messages, preferring Ravenis intelligence logical batches."""
     headers = {"Content-Type": "application/json"}
@@ -742,7 +743,7 @@ def send_to_wework(
                 rss_items=rss_items,
                 rss_new_items=rss_new_items,
                 standalone_data=standalone_data,
-                now=datetime.now(),
+                now=get_time_func() if get_time_func else datetime.now(),
                 config=intelligence_config,
             )
             batches = render_wechat_intelligence_messages(

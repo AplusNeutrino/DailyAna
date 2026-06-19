@@ -56,7 +56,7 @@ def main() -> None:
     }
     config = {
         "enabled": True,
-        "slots": {"A": {"time": "06:00"}, "B": {"time": "12:00"}, "C": {"time": "18:00"}},
+        "slots": {"A": {"time": "06:00"}, "B": {"time": "14:15"}, "C": {"time": "18:10"}},
         "scoring": {"thresholds": {"altar": 80, "brief": 60, "list": 30}},
         "wechat": {
             "max_items_per_category": 12,
@@ -74,6 +74,9 @@ def main() -> None:
     assert len(package["raw_items"]) == 45
     assert package["raw_items"][0]["id"] == "20260619A001"
     assert package["raw_items"][-1]["id"] == "20260619A045"
+    assert build_intelligence_package(report_data=report_data, now=datetime(2026, 6, 19, 14, 5), config=config)["slot"] == "A"
+    assert build_intelligence_package(report_data=report_data, now=datetime(2026, 6, 19, 14, 15), config=config)["slot"] == "B"
+    assert build_intelligence_package(report_data=report_data, now=datetime(2026, 6, 19, 18, 10), config=config)["slot"] == "C"
     assert all("http://" not in msg and "https://" not in msg for msg in messages)
     assert all(len(msg.encode("utf-8")) <= 4000 for msg in messages)
     print(f"raw_items={len(package['raw_items'])}")
