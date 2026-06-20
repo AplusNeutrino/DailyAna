@@ -425,7 +425,6 @@ class NotificationDispatcher:
                 ai_analysis=ai,
                 display_regions=display_regions or {},
                 standalone_data=sd,
-                get_time_func=self.get_time_func,
             ),
         )
 
@@ -509,6 +508,7 @@ class NotificationDispatcher:
                 ai_analysis=ai,
                 display_regions=display_regions or {},
                 standalone_data=sd,
+                get_time_func=self.get_time_func,
             ),
         )
 
