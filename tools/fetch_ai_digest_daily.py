@@ -758,6 +758,11 @@ def parse_ai_json(response: str) -> Dict[str, Any]:
             raise
 
 
+def validate_analysis_response(parsed: Dict[str, Any]) -> None:
+    if not isinstance(parsed.get("items"), list) or not isinstance(parsed.get("daily"), dict):
+        raise ValueError("AI response must contain items[] and daily{}")
+
+
 def run_ai_analysis(storage_manager, config: Dict[str, Any], topics: List[DigestTopic], date: str, no_ai: bool, prompt_file: str) -> None:
     ai_config = config.get("AI", {})
     model = ai_config.get("MODEL", "")
@@ -791,8 +796,30 @@ def run_ai_analysis(storage_manager, config: Dict[str, Any], topics: List[Digest
     try:
         raw_response = client.chat(messages, temperature=0.2)
         parsed = parse_ai_json(raw_response)
-        if not isinstance(parsed.get("items"), list) or not isinstance(parsed.get("daily"), dict):
-            raise ValueError("AI response must contain items[] and daily{}")
+        try:
+            validate_analysis_response(parsed)
+        except Exception:
+            digest_ids = [topic.digest_id for topic in topics]
+            repair_prompt = (
+                "Rewrite the previous response into strict JSON with exactly this top-level shape: "
+                '{"items":[],"daily":{}}. '
+                "Do not add Markdown fences. Include every digest_id exactly once in items[]. "
+                f"Required digest_ids: {json.dumps(digest_ids, ensure_ascii=False)}\n\n"
+                f"Previous response:\n{raw_response}"
+            )
+            repaired_response = client.chat(
+                [
+                    {
+                        "role": "system",
+                        "content": "You repair model outputs into strict JSON only.",
+                    },
+                    {"role": "user", "content": repair_prompt},
+                ],
+                temperature=0,
+            )
+            parsed = parse_ai_json(repaired_response)
+            validate_analysis_response(parsed)
+            raw_response = repaired_response
         save_analysis_success(storage_manager, topics, date, model, parsed, raw_response)
         print("[ai-digest] AI analysis saved")
     except Exception as exc:
