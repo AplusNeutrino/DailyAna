@@ -13,6 +13,7 @@ import argparse
 import hashlib
 import html
 import json
+import os
 import re
 import sqlite3
 from dataclasses import dataclass, field
@@ -679,6 +680,33 @@ def save_analysis_success(storage_manager, topics: List[DigestTopic], date: str,
     rebuild_ai_digest_fts(conn, date)
 
 
+def load_saved_analysis(storage_manager, topics: List[DigestTopic], date: str) -> Dict[str, Any]:
+    conn = get_rss_connection(storage_manager, date)
+    daily_row = conn.execute(
+        """
+        SELECT status, summary, theme_clusters_json, notable_items_json,
+               overall_observation, error
+        FROM ai_digest_daily_analysis
+        WHERE date = ?
+        """,
+        (date,),
+    ).fetchone()
+    item_rows = conn.execute(
+        """
+        SELECT digest_id, status, summary, key_points_json, category,
+               tags_json, entities_json, retrieval_keywords_json, error
+        FROM ai_digest_item_analysis
+        WHERE date = ?
+        """,
+        (date,),
+    ).fetchall()
+    return {
+        "daily": dict(daily_row) if daily_row else {},
+        "items": {row["digest_id"]: dict(row) for row in item_rows},
+        "topic_count": len(topics),
+    }
+
+
 def json_array_text(value: Any) -> str:
     try:
         parsed = json.loads(value or "[]")
@@ -687,6 +715,92 @@ def json_array_text(value: Any) -> str:
     except Exception:
         pass
     return ""
+
+
+def split_multi_account_config(value: str) -> List[str]:
+    if not value:
+        return []
+    accounts = [part.strip() for part in value.split(";")]
+    if all(not account for account in accounts):
+        return []
+    return [account for account in accounts if account]
+
+
+def truncate_text(value: str, max_chars: int) -> str:
+    value = re.sub(r"\s+", " ", value or "").strip()
+    if len(value) <= max_chars:
+        return value
+    return value[: max_chars - 1].rstrip() + "…"
+
+
+def build_wework_message(topics: List[DigestTopic], analysis: Dict[str, Any], date: str) -> str:
+    daily = analysis.get("daily") or {}
+    item_analysis = analysis.get("items") or {}
+    lines = [
+        f"## AI Digest {date}",
+        f"> 已完整归档 {len(topics)} 条新闻，图片未抓取；全文已进入历史索引。",
+        "",
+    ]
+    status = daily.get("status") or "unknown"
+    summary = daily.get("summary") or daily.get("overall_observation") or ""
+    if status == "success" and summary:
+        lines.extend(["**今日总览**", truncate_text(summary, 700), ""])
+    elif daily.get("error"):
+        lines.extend([f"**AI 分析状态**：{status}", truncate_text(daily.get("error", ""), 300), ""])
+    else:
+        lines.extend([f"**AI 分析状态**：{status}", ""])
+
+    lines.append("**重点条目**")
+    for topic in topics[:8]:
+        analysis_row = item_analysis.get(topic.digest_id, {})
+        item_summary = analysis_row.get("summary") or topic.sentence or topic.significance
+        lines.append(f"- **{topic.item_index}. {topic.title}**：{truncate_text(item_summary, 180)}")
+        if topic.primary_url:
+            lines.append(f"  {topic.primary_url}")
+
+    if len(topics) > 8:
+        lines.append(f"- 另有 {len(topics) - 8} 条已归档，可在历史索引检索。")
+
+    lines.extend(["", "历史索引：GitHub Pages / R2 `history/history-index.json`"])
+    return "\n".join(lines)
+
+
+def send_wework_notification(topics: List[DigestTopic], analysis: Dict[str, Any], date: str) -> bool:
+    webhook_urls = split_multi_account_config(os.environ.get("WEWORK_WEBHOOK_URL", ""))
+    if not webhook_urls:
+        print("[ai-digest] notification skipped: WEWORK_WEBHOOK_URL is not configured")
+        return False
+
+    msg_type = (os.environ.get("WEWORK_MSG_TYPE") or "markdown").strip().lower()
+    content = build_wework_message(topics, analysis, date)
+    if msg_type == "text":
+        payload = {"msgtype": "text", "text": {"content": re.sub(r"[*#>`]", "", content)}}
+    else:
+        payload = {"msgtype": "markdown", "markdown": {"content": content}}
+
+    success = True
+    for index, webhook_url in enumerate(webhook_urls, 1):
+        try:
+            response = requests.post(
+                webhook_url,
+                headers={"Content-Type": "application/json"},
+                json=payload,
+                timeout=30,
+            )
+            if response.status_code != 200:
+                print(f"[ai-digest] notification failed #{index}: HTTP {response.status_code}")
+                success = False
+                continue
+            result = response.json()
+            if result.get("errcode") != 0:
+                print(f"[ai-digest] notification failed #{index}: {result.get('errmsg')}")
+                success = False
+                continue
+            print(f"[ai-digest] notification sent #{index}")
+        except Exception as exc:
+            print(f"[ai-digest] notification failed #{index}: {exc}")
+            success = False
+    return success
 
 
 def rebuild_ai_digest_fts(conn: sqlite3.Connection, date: str) -> None:
@@ -897,6 +1011,8 @@ def main() -> int:
         print(f"[ai-digest] saved {len(topics)} RSS compatibility items as {FEED_ID}")
 
         run_ai_analysis(storage, config, topics, target_date, args.no_ai, args.prompt_file)
+        analysis_snapshot = load_saved_analysis(storage, topics, target_date)
+        send_wework_notification(topics, analysis_snapshot, target_date)
 
         if args.json_snapshot:
             snapshot = write_json_snapshot(topics, digest_item, target_date)

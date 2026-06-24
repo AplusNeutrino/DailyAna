@@ -58,6 +58,8 @@ jobs:
           S3_REGION: ${{ secrets.S3_REGION }}
           AI_API_KEY: ${{ secrets.AI_API_KEY }}
           AI_API_BASE: ${{ secrets.AI_API_BASE }}
+          WEWORK_WEBHOOK_URL: ${{ secrets.WEWORK_WEBHOOK_URL }}
+          WEWORK_MSG_TYPE: ${{ secrets.WEWORK_MSG_TYPE }}
           GITHUB_ACTIONS: true
         run: uv run python tools/fetch_ai_digest_daily.py --json-snapshot
 
