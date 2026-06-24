@@ -84,6 +84,66 @@ CREATE TABLE IF NOT EXISTS rss_push_records (
 -- ============================================
 
 -- RSS 源索引
+-- ============================================
+-- AI Digest full archive tables
+-- ============================================
+CREATE TABLE IF NOT EXISTS ai_digest_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    date TEXT NOT NULL,
+    item_index INTEGER NOT NULL,
+    digest_id TEXT NOT NULL UNIQUE,
+    title TEXT NOT NULL,
+    page_url TEXT NOT NULL,
+    primary_url TEXT DEFAULT '',
+    published_at TEXT DEFAULT '',
+    sentence TEXT DEFAULT '',
+    link_text TEXT DEFAULT '',
+    playbook TEXT DEFAULT '',
+    significance TEXT DEFAULT '',
+    use_cases_json TEXT DEFAULT '[]',
+    source_urls_json TEXT DEFAULT '[]',
+    clean_html TEXT DEFAULT '',
+    full_text TEXT DEFAULT '',
+    content_hash TEXT NOT NULL,
+    first_crawl_time TEXT NOT NULL,
+    last_crawl_time TEXT NOT NULL,
+    crawl_count INTEGER DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS ai_digest_item_analysis (
+    digest_id TEXT PRIMARY KEY,
+    date TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('success', 'failed', 'skipped')),
+    summary TEXT DEFAULT '',
+    key_points_json TEXT DEFAULT '[]',
+    category TEXT DEFAULT '',
+    tags_json TEXT DEFAULT '[]',
+    entities_json TEXT DEFAULT '[]',
+    retrieval_keywords_json TEXT DEFAULT '[]',
+    model TEXT DEFAULT '',
+    error TEXT DEFAULT '',
+    raw_response TEXT DEFAULT '',
+    analyzed_at TEXT DEFAULT '',
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (digest_id) REFERENCES ai_digest_items(digest_id)
+);
+
+CREATE TABLE IF NOT EXISTS ai_digest_daily_analysis (
+    date TEXT PRIMARY KEY,
+    status TEXT NOT NULL CHECK(status IN ('success', 'failed', 'skipped')),
+    summary TEXT DEFAULT '',
+    theme_clusters_json TEXT DEFAULT '[]',
+    notable_items_json TEXT DEFAULT '[]',
+    overall_observation TEXT DEFAULT '',
+    model TEXT DEFAULT '',
+    error TEXT DEFAULT '',
+    raw_response TEXT DEFAULT '',
+    analyzed_at TEXT DEFAULT '',
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE INDEX IF NOT EXISTS idx_rss_feed ON rss_items(feed_id);
 
 -- 发布时间索引（用于按时间排序）
@@ -105,3 +165,24 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_rss_guid_feed
 
 -- 抓取状态索引
 CREATE INDEX IF NOT EXISTS idx_rss_crawl_status_record ON rss_crawl_status(crawl_record_id);
+
+CREATE INDEX IF NOT EXISTS idx_ai_digest_date ON ai_digest_items(date);
+CREATE INDEX IF NOT EXISTS idx_ai_digest_digest_id ON ai_digest_items(digest_id);
+CREATE INDEX IF NOT EXISTS idx_ai_digest_content_hash ON ai_digest_items(content_hash);
+CREATE INDEX IF NOT EXISTS idx_ai_digest_published ON ai_digest_items(published_at DESC);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS ai_digest_items_fts USING fts5(
+    digest_id UNINDEXED,
+    title,
+    sentence,
+    link_text,
+    playbook,
+    significance,
+    use_cases,
+    source_urls,
+    full_text,
+    analysis_summary,
+    analysis_tags,
+    analysis_keywords,
+    tokenize='unicode61'
+);

@@ -1,0 +1,87 @@
+name: Ravenis Core - AI Digest Daily
+
+on:
+  schedule:
+    # GitHub cron uses UTC. 03:00 UTC is 11:00 Beijing time.
+    # The upstream digest normally publishes around 08:30-09:00 Beijing time.
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ai-digest-daily-${{ github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          clean: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Install dependencies
+        run: uv sync --frozen --no-dev
+
+      - name: Checkout private runtime config
+        uses: actions/checkout@v6
+        with:
+          repository: AplusNeutrino/Ravenis-Secrets
+          token: ${{ secrets.RAVENIS_SECRETS_TOKEN }}
+          path: .ravenis-secrets
+
+      - name: Overlay private runtime config
+        run: rsync -a .ravenis-secrets/config/ config/
+
+      - name: Fetch AI Digest topics
+        env:
+          S3_BUCKET_NAME: ${{ secrets.S3_BUCKET_NAME }}
+          S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+          S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+          S3_ENDPOINT_URL: ${{ secrets.S3_ENDPOINT_URL }}
+          S3_REGION: ${{ secrets.S3_REGION }}
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          AI_API_BASE: ${{ secrets.AI_API_BASE }}
+          GITHUB_ACTIONS: true
+        run: uv run python tools/fetch_ai_digest_daily.py --json-snapshot
+
+      - name: Build history search index
+        if: always()
+        continue-on-error: true
+        env:
+          S3_BUCKET_NAME: ${{ secrets.S3_BUCKET_NAME }}
+          S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+          S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+          S3_ENDPOINT_URL: ${{ secrets.S3_ENDPOINT_URL }}
+          S3_REGION: ${{ secrets.S3_REGION }}
+        run: uv run python tools/build_history_index.py --retention-days 30 --output docs/history/history-index.json --upload-key history/history-index.json --prune-remote
+
+      - name: Setup GitHub Pages
+        if: always()
+        uses: actions/configure-pages@v5
+
+      - name: Upload GitHub Pages artifact
+        if: always()
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+
+      - name: Deploy GitHub Pages
+        if: always()
+        uses: actions/deploy-pages@v4

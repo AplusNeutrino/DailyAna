@@ -1,0 +1,40 @@
+You will receive one day of AI Digest topics as JSON.
+
+Return strict JSON only. Do not wrap the answer in Markdown fences.
+
+Required output shape:
+{
+  "items": [
+    {
+      "digest_id": "must exactly match the input digest_id",
+      "summary": "1-2 sentence concise Chinese summary",
+      "key_points": ["short point 1", "short point 2"],
+      "category": "one concise category",
+      "tags": ["tag1", "tag2"],
+      "entities": ["product/company/person/project names"],
+      "retrieval_keywords": ["searchable keyword 1", "searchable keyword 2"]
+    }
+  ],
+  "daily": {
+    "summary": "Chinese summary of the whole day",
+    "theme_clusters": [
+      {
+        "theme": "cluster name",
+        "digest_ids": ["related digest_id"],
+        "summary": "cluster summary"
+      }
+    ],
+    "notable_items": ["digest_id for items worth revisiting"],
+    "overall_observation": "one paragraph observation"
+  }
+}
+
+Rules:
+- Include every input item exactly once in items[].
+- Keep digest_id unchanged.
+- Prefer useful retrieval keywords over broad generic words.
+- Use Chinese for summaries, categories, tags, and observations.
+- If a field is uncertain, use an empty string or empty array instead of inventing facts.
+
+Input JSON:
+{payload}

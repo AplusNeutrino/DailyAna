@@ -1,0 +1,24 @@
+# Archived original RSS subscription sources.
+# These feeds were moved out of config/config.yaml so the main crawler no longer fetches them.
+# Restore by copying rss_block.rss.feeds entries back into config/config.yaml.
+archived_at: 2026-06-23
+source_file: config/config.yaml
+rss_block:
+  rss:
+    enabled: true
+    freshness_filter:
+      enabled: true
+      max_age_days: 1
+    feeds:
+    - id: hacker-news
+      name: Hacker News
+      url: https://hnrss.org/frontpage
+    - id: ruanyifeng
+      name: 阮一峰的网络日志
+      url: http://www.ruanyifeng.com/blog/atom.xml
+      enabled: true
+    - id: yahoo-finance
+      name: 雅虎财经
+      url: https://finance.yahoo.com/news/rssindex
+display_standalone_rss_feeds_block:
+  rss_feeds: []

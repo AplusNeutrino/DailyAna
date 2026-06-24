@@ -42,21 +42,11 @@ platforms:
     name: 知乎
     expected_domain: zhihu.com
 rss:
-  enabled: true
+  enabled: false
   freshness_filter:
     enabled: true
     max_age_days: 1
-  feeds:
-  - id: hacker-news
-    name: Hacker News
-    url: https://hnrss.org/frontpage
-  - id: ruanyifeng
-    name: 阮一峰的网络日志
-    url: http://www.ruanyifeng.com/blog/atom.xml
-    enabled: true
-  - id: yahoo-finance
-    name: 雅虎财经
-    url: https://finance.yahoo.com/news/rssindex
+  feeds: []
 report:
   mode: current
   display_mode: keyword

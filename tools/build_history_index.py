@@ -126,11 +126,26 @@ def add_item(items: list[dict[str, Any]], seen: set[str], item: dict[str, Any]) 
     seen.add(dedupe_key)
     item["search_text"] = " ".join(
         str(item.get(key, ""))
-        for key in ("id", "short_id", "date", "title", "source", "source_id", "type", "category", "cluster_id")
+        for key in (
+            "id", "short_id", "date", "title", "source", "source_id",
+            "type", "category", "cluster_id", "summary", "content",
+            "sentence", "playbook", "significance", "overall_observation",
+        )
     ).lower()
     item["search_text"] += " " + " ".join(item.get("tags", []) or []).lower()
     item["search_text"] += " " + " ".join(item.get("intent", []) or []).lower()
+    item["search_text"] += " " + " ".join(item.get("retrieval_keywords", []) or []).lower()
+    item["search_text"] += " " + " ".join(item.get("entities", []) or []).lower()
+    item["search_text"] += " " + " ".join(item.get("source_urls", []) or []).lower()
     items.append(item)
+
+
+def parse_json_list(value: str) -> list[Any]:
+    try:
+        parsed = json.loads(value or "[]")
+        return parsed if isinstance(parsed, list) else []
+    except Exception:
+        return []
 
 
 def extract_intelligence_json(local_path: Path, date_str: str, kind: str,
@@ -228,6 +243,7 @@ def extract_rss(db_path: Path, date_str: str, items: list[dict[str, Any]], seen:
                    i.published_at, i.first_crawl_time, i.last_crawl_time
             FROM rss_items i
             LEFT JOIN rss_feeds f ON i.feed_id = f.id
+            WHERE i.feed_id != 'ai-digest-daily'
             """
         ).fetchall()
         for row in rows:
@@ -242,10 +258,88 @@ def extract_rss(db_path: Path, date_str: str, items: list[dict[str, Any]], seen:
                 "first_seen": row["first_crawl_time"],
                 "last_seen": row["last_crawl_time"],
             })
+        extract_ai_digest(conn, date_str, items, seen)
     except sqlite3.Error as exc:
         print(f"[history] read rss failed: {db_path}: {exc}")
     finally:
         conn.close()
+
+
+def extract_ai_digest(conn: sqlite3.Connection, date_str: str, items: list[dict[str, Any]], seen: set[str]) -> None:
+    try:
+        table_exists = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='ai_digest_items'"
+        ).fetchone()
+        if not table_exists:
+            return
+        rows = conn.execute(
+            """
+            SELECT i.digest_id, i.item_index, i.title, i.page_url, i.primary_url,
+                   i.published_at, i.sentence, i.link_text, i.playbook,
+                   i.significance, i.use_cases_json, i.source_urls_json,
+                   i.full_text, i.content_hash, i.first_crawl_time, i.last_crawl_time,
+                   a.status AS analysis_status, a.summary AS analysis_summary,
+                   a.key_points_json, a.category, a.tags_json, a.entities_json,
+                   a.retrieval_keywords_json,
+                   d.summary AS daily_summary, d.overall_observation
+            FROM ai_digest_items i
+            LEFT JOIN ai_digest_item_analysis a ON a.digest_id = i.digest_id
+            LEFT JOIN ai_digest_daily_analysis d ON d.date = i.date
+            WHERE i.date = ?
+            ORDER BY i.item_index ASC
+            """,
+            (date_str,),
+        ).fetchall()
+    except sqlite3.Error as exc:
+        print(f"[history] read ai digest failed: {exc}")
+        return
+
+    for row in rows:
+        use_cases = parse_json_list(row["use_cases_json"])
+        source_urls = parse_json_list(row["source_urls_json"])
+        tags = parse_json_list(row["tags_json"])
+        entities = parse_json_list(row["entities_json"])
+        retrieval_keywords = parse_json_list(row["retrieval_keywords_json"])
+        key_points = parse_json_list(row["key_points_json"])
+        content_parts = [
+            row["full_text"] or "",
+            row["analysis_summary"] or "",
+            " ".join(key_points),
+            " ".join(tags),
+            " ".join(entities),
+            " ".join(retrieval_keywords),
+            row["daily_summary"] or "",
+            row["overall_observation"] or "",
+        ]
+        add_item(items, seen, {
+            "id": row["digest_id"],
+            "short_id": f"ai-digest-{date_str}-{row['item_index']}",
+            "date": date_str,
+            "type": "ai_digest",
+            "title": row["title"],
+            "source": "AI Digest Daily",
+            "source_id": "ai-digest-daily",
+            "url": row["primary_url"] or row["page_url"],
+            "page_url": row["page_url"],
+            "published_at": row["published_at"] or "",
+            "first_seen": row["first_crawl_time"],
+            "last_seen": row["last_crawl_time"],
+            "sentence": row["sentence"] or "",
+            "link_text": row["link_text"] or "",
+            "playbook": row["playbook"] or "",
+            "significance": row["significance"] or "",
+            "use_cases": use_cases,
+            "source_urls": source_urls,
+            "content_hash": row["content_hash"] or "",
+            "content": "\n".join(part for part in content_parts if part).strip(),
+            "summary": row["analysis_summary"] or row["sentence"] or "",
+            "key_points": key_points,
+            "category": row["category"] or "",
+            "tags": tags,
+            "entities": entities,
+            "retrieval_keywords": retrieval_keywords,
+            "analysis_status": row["analysis_status"] or "",
+        })
 
 
 def prune_remote(client, bucket: str, keys: list[tuple[str, str, str]], cutoff_date: str) -> int:
