@@ -1,0 +1,105 @@
+version: 1
+
+categories:
+  - id: ai_models
+    name: AI / 模型
+    keywords: [ai, openai, gpt, claude, gemini, deepseek, qwen, llm, 大模型, 模型, 人工智能, 智谱, 通义, kimi]
+    default_intents: [WORK_CORE]
+  - id: chips_compute
+    name: 芯片 / 算力
+    keywords: [芯片, 算力, 英伟达, nvidia, gpu, 半导体, 台积电, 华为昇腾, 存储, hbm, 光刻, 液冷]
+    default_intents: [WORK_CORE]
+  - id: autonomous_robotics
+    name: 自动驾驶 / 机器人
+    keywords: [机器人, 自动驾驶, 特斯拉, tesla, fsd, 智驾, 宇树, 智元, 小鹏, 蔚来]
+    default_intents: [WORK_CORE]
+  - id: new_energy
+    name: 新能源 / 能源
+    keywords: [新能源, 电池, 储能, 光伏, 风电, 锂, 能源, 油价, 原油]
+    default_intents: [WORK_EDGE]
+  - id: developer_open_source
+    name: 开发者 / 工具 / 开源
+    keywords: [github, 开源, 开发者, 编程, 代码, 数据库, python, javascript, 工具, api]
+    default_intents: [WORK_CORE]
+  - id: macro_finance
+    name: 宏观 / 财经 / 地缘
+    keywords: [美联储, 通胀, 美股, 港股, a股, 黄金, 汇率, 财报, 市场, 中东, 伊朗, 美国, 欧洲, 地缘]
+    default_intents: [WORK_EDGE]
+  - id: domestic_policy
+    name: 国内政策 / 消费 / 社会
+    keywords: [政策, 监管, 官方, 消费, 食品, 事故, 维权, 社会, 教育, 医疗]
+    default_intents: [WORK_EDGE]
+  - id: culture
+    name: 娱乐 / 体育 / 游戏
+    keywords: [游戏, 电竞, 体育, 足球, 篮球, 电影, 影视, 明星, 演唱会, b站, bilibili]
+    default_intents: [CULTURE]
+  - id: other
+    name: 其他
+    keywords: []
+    default_intents: [NOISE]
+
+tags:
+  DeepSeek: [deepseek]
+  Qwen: [qwen, 通义]
+  OpenAI: [openai, gpt]
+  Claude: [claude, anthropic]
+  Gemini: [gemini, google ai]
+  英伟达: [英伟达, nvidia]
+  华为昇腾: [昇腾, ascend]
+  芯片: [芯片, 半导体, gpu, hbm]
+  机器人: [机器人, 宇树, 智元]
+  自动驾驶: [自动驾驶, fsd, 智驾]
+  特斯拉: [特斯拉, tesla]
+  宏观: [美联储, 通胀, 汇率, 黄金]
+  地缘: [中东, 伊朗, 美国, 欧洲, 地缘]
+  游戏: [游戏, 电竞]
+  体育: [体育, 足球, 篮球]
+  开源: [开源, github]
+  开发工具: [开发者, 编程, 代码, api, 数据库]
+
+intents:
+  MARKET: [财报, 股, 涨, 跌, 融资, 并购, 价格, 市值, 订单]
+  POLICY: [政策, 监管, 官方, 法规, 标准, 条例]
+  RISK: [事故, 处罚, 监管, 风险, 召回, 造谣, 刑案, 下架, 封禁, 漏洞]
+
+source_quality:
+  default: 62
+  rss_default: 76
+  sources:
+    hacker-news: 92
+    ruanyifeng: 88
+    yahoo-finance: 86
+    wallstreetcn-hot: 82
+    cls-hot: 82
+  patterns:
+    - contains: [hacker, github, verge, arxiv, tech, developer, ruanyifeng, 阮一峰]
+      score: 88
+    - contains: [finance, wallstreet, cls, 财联社, 华尔街, yahoo]
+      score: 84
+  social_sources: [weibo, douyin, tieba, zhihu, bilibili-hot-search, toutiao, baidu]
+  social_score: 52
+
+scoring:
+  weights:
+    relevance: 0.30
+    source_quality: 0.20
+    multi_source: 0.20
+    novelty: 0.15
+    impact: 0.15
+  relevance:
+    ai_models: 95
+    chips_compute: 92
+    autonomous_robotics: 88
+    developer_open_source: 84
+    new_energy: 76
+    macro_finance: 72
+    domestic_policy: 58
+    culture: 35
+    other: 35
+  impact_intents: [MARKET, POLICY, RISK]
+  noise_penalty: 18
+
+clustering:
+  title_bigram_similarity: 0.55
+  generic_tags: [AI, 芯片, 宏观, 其他]
+  min_distinct_sources: 2

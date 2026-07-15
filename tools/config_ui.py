@@ -12,23 +12,34 @@ Then open:
 
 from __future__ import annotations
 
-import html
 import json
+import os
 import re
+import subprocess
 from copy import deepcopy
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import unquote, urlparse
 
 import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CONFIG_PATH = ROOT / "config" / "config.yaml"
-KEYWORDS_PATH = ROOT / "config" / "frequency_words.txt"
-CATEGORIES_PATH = ROOT / "config" / "content_categories.yaml"
-PROFILE_DIR = ROOT / "config" / "profiles"
+if ROOT.name != "DailyAna-push-worktree":
+    raise RuntimeError(
+        f"Configuration console may only run from DailyAna-push-worktree, got: {ROOT}"
+    )
+PRIVATE_ROOT = Path(
+    os.environ.get("RAVENIS_SECRETS_REPO") or ROOT.parent / "Ravenis-Secrets"
+).resolve()
+if not (PRIVATE_ROOT / ".git").exists():
+    raise RuntimeError(f"Ravenis-Secrets repository not found: {PRIVATE_ROOT}")
+PRIVATE_CONFIG_DIR = PRIVATE_ROOT / "config"
+CONFIG_PATH = PRIVATE_CONFIG_DIR / "config.yaml"
+KEYWORDS_PATH = PRIVATE_CONFIG_DIR / "frequency_words.txt"
+CATEGORIES_PATH = PRIVATE_CONFIG_DIR / "content_categories.yaml"
+PROFILE_DIR = PRIVATE_CONFIG_DIR / "profiles"
 PROFILE_NAMES = ("work", "relax")
 CATEGORY_DEFAULTS = {
     "frontier": {"name": "前沿", "description": "AI、数据、科技、产业与前沿公司"},
@@ -441,7 +452,22 @@ def state_payload() -> dict:
         profile = load_profile(name)
         profiles[name] = profile
         effective[name] = deep_merge(config, profile)
+    dirty_result = subprocess.run(
+        ["git", "-C", str(PRIVATE_ROOT), "status", "--porcelain"],
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    dirty = bool(dirty_result.stdout.strip()) if dirty_result.returncode == 0 else None
+    local_manifest = ROOT / "docs" / "history" / "manifest.json"
     return {
+        "repository": {
+            "name": "Ravenis-Secrets",
+            "path": str(PRIVATE_ROOT),
+            "config_path": str(CONFIG_PATH.resolve()),
+            "dirty": dirty,
+        },
         "platforms": config.get("platforms", {}),
         "rss": config.get("rss", {}),
         "display": config.get("display", {}),
@@ -454,9 +480,16 @@ def state_payload() -> dict:
         "keywords": get_keyword_groups(),
         "global_filters": get_global_filters(),
         "history": {
-            "ready": False,
-            "endpoint": "/api/history/search?q=keyword",
-            "message": "数据库归档接口已预留，接入后可在这里搜索历史新闻。",
+            "ready": local_manifest.exists(),
+            "page_url": os.environ.get(
+                "RAVENIS_HISTORY_URL",
+                "https://aplusneutrino.github.io/DailyAna/history/",
+            ),
+            "message": (
+                f"本地公开投影已生成：{local_manifest}"
+                if local_manifest.exists()
+                else "本地尚未生成公开投影；使用 GitHub Pages 查看最后一次成功发布版本。"
+            ),
         },
     }
 
@@ -535,7 +568,7 @@ HTML = r"""<!doctype html>
 </head>
 <body>
   <header>
-    <h1>Ravenis Core 配置台</h1>
+    <div><h1>Ravenis Core 配置台</h1><div id="repoStatus" class="muted"></div></div>
     <div><span id="status" class="toast"></span></div>
   </header>
   <main>
@@ -677,14 +710,10 @@ HTML = r"""<!doctype html>
     </section>
 
     <section id="history">
-      <div class="toolbar">
-        <input class="search" id="historySearch" placeholder="搜索历史新闻，接口已预留" />
-        <button class="primary" onclick="searchHistory()">搜索</button>
-      </div>
       <div class="card">
-        <h3>数据库接口占位</h3>
+        <h3>公开历史搜索</h3>
         <p id="historyMessage" class="muted"></p>
-        <pre id="historyResult"></pre>
+        <p><a id="historyLink" target="_blank" rel="noopener noreferrer">打开 GitHub Pages 历史搜索</a></p>
       </div>
     </section>
   </main>
@@ -724,6 +753,8 @@ HTML = r"""<!doctype html>
 
     async function load() {
       state = await api('/api/state');
+      const repo=state.repository||{};
+      qs('repoStatus').textContent=`编辑仓库：${repo.name||''}｜${repo.config_path||repo.path||''}｜Git ${repo.dirty===true?'有未提交修改':repo.dirty===false?'干净':'状态未知'}`;
       renderCategoryChecks('platCategories', 'platCategory');
       renderCategoryChecks('rssCategories', 'rssCategory');
       renderCategoryChecks('keywordCategories', 'keywordCategory');
@@ -864,8 +895,7 @@ HTML = r"""<!doctype html>
       })});
       renderProfile(); toast('推送方案已保存');
     }
-    function renderHistory(){ qs('historyMessage').textContent = state.history.message; }
-    async function searchHistory(){ const data = await api('/api/history/search?q='+encodeURIComponent(qs('historySearch').value)); qs('historyResult').textContent = JSON.stringify(data,null,2); }
+    function renderHistory(){ qs('historyMessage').textContent = state.history.message; qs('historyLink').href=state.history.page_url; }
 
     load().catch(err => alert(err.message));
   </script>
@@ -906,14 +936,6 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_html()
             elif parsed.path == "/api/state":
                 self.send_json(state_payload())
-            elif parsed.path == "/api/history/search":
-                q = parse_qs(parsed.query).get("q", [""])[0]
-                self.send_json({
-                    "ready": False,
-                    "query": q,
-                    "items": [],
-                    "message": "历史新闻数据库尚未接入；接口已预留。",
-                })
             else:
                 self.send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
         except Exception as exc:

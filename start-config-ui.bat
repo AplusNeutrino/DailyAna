@@ -2,6 +2,7 @@
 setlocal
 title Ravenis Core Config UI
 cd /d "%~dp0"
+set "RAVENIS_SECRETS_REPO=%~dp0..\Ravenis-Secrets"
 
 if exist ".venv\Scripts\python.exe" (
   ".venv\Scripts\python.exe" tools\config_ui.py

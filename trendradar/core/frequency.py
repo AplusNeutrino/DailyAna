@@ -16,7 +16,16 @@
 import os
 import re
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional, Union
+from typing import Dict, List, Optional, Tuple, Union
+
+
+def _private_resource(relative_path: str) -> Path:
+    private_dir = os.environ.get("RAVENIS_PRIVATE_CONFIG_DIR", "").strip()
+    if private_dir:
+        candidate = Path(private_dir) / relative_path
+        if candidate.exists():
+            return candidate
+    return Path("config") / relative_path
 
 
 def _parse_word(word: str) -> Dict:
@@ -121,14 +130,16 @@ def load_frequency_words(
         FileNotFoundError: 频率词文件不存在
     """
     if frequency_file is None:
-        frequency_file = os.environ.get(
-            "FREQUENCY_WORDS_PATH", "config/frequency_words.txt"
-        )
+        frequency_file = os.environ.get("FREQUENCY_WORDS_PATH", "").strip()
+        if not frequency_file:
+            frequency_file = str(_private_resource("frequency_words.txt"))
 
     frequency_path = Path(frequency_file)
     if not frequency_path.exists():
         # 尝试作为短文件名，拼接 config/custom/keyword/ 前缀
-        custom_path = Path("config/custom/keyword") / frequency_file
+        private_dir = os.environ.get("RAVENIS_PRIVATE_CONFIG_DIR", "").strip()
+        custom_root = Path(private_dir) if private_dir else Path("config")
+        custom_path = custom_root / "custom" / "keyword" / frequency_file
         if custom_path.exists():
             frequency_path = custom_path
         else:

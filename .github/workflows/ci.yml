@@ -1,0 +1,61 @@
+name: Ravenis Core - CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v7
+      - name: Install locked dependencies
+        run: uv sync --frozen --all-groups
+      - name: Compile Python
+        run: uv run python -m compileall -q trendradar tools tests
+      - name: Static checks
+        run: >-
+          uv run ruff check
+          trendradar/intelligence.py
+          trendradar/__main__.py
+          trendradar/ai_digest_contract.py
+          trendradar/notification/wework.py
+          trendradar/notification/dispatcher.py
+          trendradar/notification/senders.py
+          trendradar/core/loader.py
+          trendradar/core/frequency.py
+          trendradar/ai/prompt_loader.py
+          trendradar/storage/manager.py
+          trendradar/storage/remote.py
+          tools/build_history_index.py
+          tools/migrate_legacy_history.py
+          tools/fetch_ai_digest_daily.py
+          tools/validate_runtime.py
+          tests
+      - name: Runtime configuration and workflow mapping
+        run: |
+          uv run python tools/validate_runtime.py --profile work --slot A
+          uv run python tools/validate_runtime.py --profile relax --slot C
+          uv run python - <<'PY'
+          from pathlib import Path
+          import yaml
+          for path in Path('.github/workflows').glob('*.yml'):
+              data = yaml.safe_load(path.read_text(encoding='utf-8'))
+              if not isinstance(data, dict):
+                  raise SystemExit(f'invalid workflow YAML: {path}')
+              print('OK', path)
+          PY
+      - name: Offline tests
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+        run: uv run pytest -q

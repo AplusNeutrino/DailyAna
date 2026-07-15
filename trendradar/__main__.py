@@ -15,20 +15,18 @@ import sys
 import webbrowser
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Optional, Tuple
 
-import requests
-
-from trendradar.context import AppContext
 from trendradar import __version__
+from trendradar.ai import AIAnalysisResult, AIAnalyzer
+from trendradar.context import AppContext
 from trendradar.core import load_config, parse_multi_account_config, validate_paired_configs
 from trendradar.core.analyzer import convert_keyword_stats_to_platform_stats
+from trendradar.core.cdn import fetch_with_fallback
+from trendradar.core.scheduler import ResolvedSchedule
 from trendradar.crawler import DataFetcher
 from trendradar.storage import convert_crawl_results_to_news_data
-from trendradar.utils.time import DEFAULT_TIMEZONE, is_within_days, calculate_days_old
-from trendradar.ai import AIAnalyzer, AIAnalysisResult
-from trendradar.core.scheduler import ResolvedSchedule
-from trendradar.core.cdn import fetch_with_fallback
+from trendradar.utils.time import DEFAULT_TIMEZONE, calculate_days_old, is_within_days
 
 
 def _parse_version(version_str: str) -> Tuple[int, int, int]:
@@ -575,7 +573,7 @@ class NewsAnalyzer:
             print(f"[AI] 分析出错 ({error_type}): {error_msg}")
             # 详细错误日志到 stderr
             import sys
-            print(f"[AI] 详细错误堆栈:", file=sys.stderr)
+            print("[AI] 详细错误堆栈:", file=sys.stderr)
             traceback.print_exc(file=sys.stderr)
             return AIAnalysisResult(success=False, error=f"{error_type}: {error_msg}")
 
@@ -1016,13 +1014,15 @@ class NewsAnalyzer:
                 print("未配置任何通知渠道，跳过通知发送")
                 return False
 
-            # 记录推送成功
-            if any(results.values()):
-                if schedule.once_push and schedule.period_key:
-                    scheduler = self.ctx.create_scheduler()
-                    date_str = self.ctx.format_date()
-                    scheduler.record_execution(schedule.period_key, "push", date_str)
+            failed_channels = [name for name, ok in results.items() if not ok]
+            if failed_channels:
+                print(f"通知发送失败：{', '.join(failed_channels)}")
+                return False
 
+            if schedule and schedule.once_push and schedule.period_key:
+                scheduler = self.ctx.create_scheduler()
+                date_str = self.ctx.format_date()
+                scheduler.record_execution(schedule.period_key, "push", date_str)
             return True
 
         elif cfg["ENABLE_NOTIFICATION"] and not has_notification:
@@ -1131,7 +1131,7 @@ class NewsAnalyzer:
             return None, None, None, set()
 
         try:
-            from trendradar.crawler.rss import RSSFetcher, RSSFeedConfig
+            from trendradar.crawler.rss import RSSFeedConfig, RSSFetcher
 
             # 构建 RSS 源配置
             feeds = []
@@ -1196,12 +1196,12 @@ class NewsAnalyzer:
 
             # 保存到存储后端
             if self.storage_manager.save_rss_data(rss_data):
-                print(f"[RSS] 数据已保存到存储后端")
+                print("[RSS] 数据已保存到存储后端")
 
                 # 处理 RSS 数据（按模式过滤）并返回用于合并推送
                 return self._process_rss_data_by_mode(rss_data)
             else:
-                print(f"[RSS] 数据保存失败")
+                print("[RSS] 数据保存失败")
                 return None, None, None, set()
 
         except ImportError as e:
@@ -1491,8 +1491,9 @@ class NewsAnalyzer:
     def _generate_rss_html_report(self, rss_items: list, feeds_info: dict) -> str:
         """生成 RSS HTML 报告"""
         try:
-            from trendradar.report.rss_html import render_rss_html_content
             from pathlib import Path
+
+            from trendradar.report.rss_html import render_rss_html_content
 
             html_content = render_rss_html_content(
                 rss_items=rss_items,
@@ -1712,7 +1713,7 @@ class NewsAnalyzer:
             standalone_data = self._prepare_standalone_data(
                 results, id_to_name, title_info, raw_rss_items
             )
-            self._send_notification_if_needed(
+            notification_ok = self._send_notification_if_needed(
                 stats,
                 mode_strategy["report_type"],
                 self.report_mode,
@@ -1727,6 +1728,8 @@ class NewsAnalyzer:
                 current_results=results,
                 schedule=schedule,
             )
+            if self.is_github_actions and not notification_ok:
+                raise RuntimeError("required production notification did not complete successfully")
 
         # 打开浏览器（仅在非容器环境）
         if self._should_open_browser() and html_file:
@@ -2261,10 +2264,12 @@ def main():
         print("  • config/config.yaml")
         print("  • config/frequency_words.txt")
         print("\n参考项目文档进行正确配置")
+        raise SystemExit(1)
     except Exception as e:
         print(f"❌ 程序运行错误: {e}")
         if debug_mode:
             raise
+        raise SystemExit(1)
 
 
 def _handle_status_commands(config: Dict) -> None:
@@ -2287,14 +2292,14 @@ def _handle_status_commands(config: Dict) -> None:
         print(f"\n⏰ 当前时间: {now.strftime('%Y-%m-%d %H:%M:%S')} ({ctx.timezone})")
         print(f"📅 当前日期: {date_str}")
 
-        print(f"\n📋 调度信息:")
+        print("\n📋 调度信息:")
         print(f"  日计划: {schedule.day_plan}")
         if schedule.period_key:
             print(f"  当前时间段: {schedule.period_name or schedule.period_key} ({schedule.period_key})")
         else:
-            print(f"  当前时间段: 无（使用默认配置）")
+            print("  当前时间段: 无（使用默认配置）")
 
-        print(f"\n🔧 行为开关:")
+        print("\n🔧 行为开关:")
         print(f"  采集数据: {'✅ 是' if schedule.collect else '❌ 否'}")
         print(f"  AI 分析:  {'✅ 是' if schedule.analyze else '❌ 否'}")
         print(f"  推送通知: {'✅ 是' if schedule.push else '❌ 否'}")
@@ -2302,17 +2307,17 @@ def _handle_status_commands(config: Dict) -> None:
         print(f"  AI 模式:  {schedule.ai_mode}")
 
         if schedule.period_key:
-            print(f"\n🔁 一次性控制:")
+            print("\n🔁 一次性控制:")
             if schedule.once_analyze:
                 already_analyzed = scheduler.already_executed(schedule.period_key, "analyze", date_str)
                 print(f"  AI 分析:  仅一次 {'(今日已执行 ⚠️)' if already_analyzed else '(今日未执行 ✅)'}")
             else:
-                print(f"  AI 分析:  不限次数")
+                print("  AI 分析:  不限次数")
             if schedule.once_push:
                 already_pushed = scheduler.already_executed(schedule.period_key, "push", date_str)
                 print(f"  推送通知: 仅一次 {'(今日已执行 ⚠️)' if already_pushed else '(今日未执行 ✅)'}")
             else:
-                print(f"  推送通知: 不限次数")
+                print("  推送通知: 不限次数")
 
     except Exception as e:
         print(f"\n❌ 获取调度状态失败: {e}")

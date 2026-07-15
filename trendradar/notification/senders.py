@@ -15,9 +15,10 @@
 每个发送函数都支持分批发送，并通过参数化配置实现与 CONFIG 的解耦。
 """
 
+import json
+import os
 import smtplib
 import time
-import json
 from copy import deepcopy
 from datetime import datetime
 from email.header import Header
@@ -30,13 +31,15 @@ from urllib.parse import urlparse
 
 import requests
 
-from .batch import add_batch_headers, get_max_batch_header_size
-from .formatters import convert_markdown_to_mrkdwn, strip_markdown
 from trendradar.intelligence import (
     archive_intelligence_to_r2,
     build_intelligence_package,
     render_wechat_intelligence_messages,
 )
+
+from .batch import add_batch_headers, get_max_batch_header_size
+from .formatters import convert_markdown_to_mrkdwn
+from .wework import send_wework_messages
 
 
 def _extract_ai_stats(ai_analysis) -> Optional[Dict]:
@@ -572,160 +575,10 @@ def send_to_wework(
     ai_analysis: Any = None,
     display_regions: Optional[Dict] = None,
     standalone_data: Optional[Dict] = None,
-) -> bool:
-    """
-    发送到企业微信（支持分批发送，支持 markdown 和 text 两种格式，支持热榜+RSS合并+独立展示区）
-
-    Args:
-        webhook_url: 企业微信 Webhook URL
-        report_data: 报告数据
-        report_type: 报告类型
-        update_info: 更新信息（可选）
-        proxy_url: 代理 URL（可选）
-        mode: 报告模式 (daily/current)
-        account_label: 账号标签（多账号时显示）
-        batch_size: 批次大小（字节）
-        batch_interval: 批次发送间隔（秒）
-        msg_type: 消息类型 (markdown/text)
-        split_content_func: 内容分批函数
-        rss_items: RSS 统计条目列表（可选，用于合并推送）
-        rss_new_items: RSS 新增条目列表（可选，用于新增区块）
-
-    Returns:
-        bool: 发送是否成功
-    """
-    headers = {"Content-Type": "application/json"}
-    proxies = None
-    if proxy_url:
-        proxies = {"http": proxy_url, "https": proxy_url}
-
-    # 日志前缀
-    log_prefix = f"企业微信{account_label}" if account_label else "企业微信"
-
-    # 获取消息类型配置（markdown 或 text）
-    is_text_mode = msg_type.lower() == "text"
-
-    if is_text_mode:
-        print(f"{log_prefix}使用 text 格式（个人微信模式）[{report_type}]")
-    else:
-        print(f"{log_prefix}使用 markdown 格式（群机器人模式）[{report_type}]")
-
-    # text 模式使用 wework_text，markdown 模式使用 wework
-    header_format_type = "wework_text" if is_text_mode else "wework"
-
-    # 渲染 AI 分析内容并提取统计数据
-    ai_content = _render_ai_analysis(ai_analysis, "wework") if ai_analysis else None
-    ai_stats = _extract_ai_stats(ai_analysis)
-
-    # 获取分批内容，预留批次头部空间
-    header_reserve = get_max_batch_header_size(header_format_type)
-    batches = _build_message_plan_batches(
-        message_plan=message_plan,
-        channel="wework",
-        msg_type=msg_type,
-        split_content_func=split_content_func,
-        report_data=report_data,
-        report_type=report_type,
-        update_info=update_info,
-        mode=mode,
-        batch_size=batch_size,
-        header_reserve=header_reserve,
-        rss_items=rss_items,
-        rss_new_items=rss_new_items,
-        ai_content=ai_content,
-        ai_stats=ai_stats,
-        standalone_data=standalone_data,
-    )
-    if batches:
-        print(f"{log_prefix}使用 message_plan 自定义分条 [{report_type}]")
-    else:
-        batches = split_content_func(
-            report_data, "wework", update_info, max_bytes=batch_size - header_reserve, mode=mode,
-            rss_items=rss_items,
-            rss_new_items=rss_new_items,
-            ai_content=ai_content,
-            standalone_data=standalone_data,
-            ai_stats=ai_stats,
-            report_type=report_type,
-        )
-
-    # 统一添加批次头部（已预留空间，不会超限）
-    batches = add_batch_headers(batches, header_format_type, batch_size)
-
-    print(f"{log_prefix}消息分为 {len(batches)} 批次发送 [{report_type}]")
-
-    # 逐批发送
-    for i, batch_content in enumerate(batches, 1):
-        # 根据消息类型构建 payload
-        if is_text_mode:
-            # text 格式：去除 markdown 语法
-            plain_content = strip_markdown(batch_content)
-            payload = {"msgtype": "text", "text": {"content": plain_content}}
-            content_size = len(plain_content.encode("utf-8"))
-        else:
-            # markdown 格式：保持原样
-            payload = {"msgtype": "markdown", "markdown": {"content": batch_content}}
-            content_size = len(batch_content.encode("utf-8"))
-
-        print(
-            f"发送{log_prefix}第 {i}/{len(batches)} 批次，大小：{content_size} 字节 [{report_type}]"
-        )
-
-        try:
-            response = requests.post(
-                webhook_url, headers=headers, json=payload, proxies=proxies, timeout=30
-            )
-            if response.status_code == 200:
-                result = response.json()
-                if result.get("errcode") == 0:
-                    print(f"{log_prefix}第 {i}/{len(batches)} 批次发送成功 [{report_type}]")
-                    # 批次间间隔
-                    if i < len(batches):
-                        time.sleep(batch_interval)
-                else:
-                    print(
-                        f"{log_prefix}第 {i}/{len(batches)} 批次发送失败 [{report_type}]，错误：{result.get('errmsg')}"
-                    )
-                    return False
-            else:
-                print(
-                    f"{log_prefix}第 {i}/{len(batches)} 批次发送失败 [{report_type}]，状态码：{response.status_code}"
-                )
-                return False
-        except Exception as e:
-            print(f"{log_prefix}第 {i}/{len(batches)} 批次发送出错 [{report_type}]：{e}")
-            return False
-
-    print(f"{log_prefix}所有 {len(batches)} 批次发送完成 [{report_type}]")
-
-    return True
-
-
-def send_to_wework(
-    webhook_url: str,
-    report_data: Dict,
-    report_type: str,
-    update_info: Optional[Dict] = None,
-    proxy_url: Optional[str] = None,
-    mode: str = "daily",
-    account_label: str = "",
-    *,
-    batch_size: int = 4000,
-    batch_interval: float = 1.0,
-    msg_type: str = "markdown",
-    split_content_func: Callable = None,
-    message_plan: Optional[Dict] = None,
-    intelligence_config: Optional[Dict] = None,
-    rss_items: Optional[list] = None,
-    rss_new_items: Optional[list] = None,
-    ai_analysis: Any = None,
-    display_regions: Optional[Dict] = None,
-    standalone_data: Optional[Dict] = None,
     get_time_func: Callable = None,
 ) -> bool:
     """Send WeWork messages, preferring Ravenis intelligence logical batches."""
-    headers = {"Content-Type": "application/json"}
-    proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else None
+    started_at = time.monotonic()
     log_prefix = f"企业微信{account_label}" if account_label else "企业微信"
     is_text_mode = msg_type.lower() == "text"
     header_format_type = "wework_text" if is_text_mode else "wework"
@@ -735,6 +588,8 @@ def send_to_wework(
     header_reserve = get_max_batch_header_size(header_format_type)
 
     logical_batches = False
+    archive_ok = True
+    package = None
     batches: List[str] = []
     if isinstance(intelligence_config, dict) and intelligence_config.get("enabled", False):
         try:
@@ -749,10 +604,11 @@ def send_to_wework(
             batches = render_wechat_intelligence_messages(
                 package, intelligence_config, max_bytes=batch_size
             )
-            archive_intelligence_to_r2(package, batches, intelligence_config)
+            archive_ok = archive_intelligence_to_r2(package, batches, intelligence_config)
             logical_batches = bool(batches)
             print(f"{log_prefix}使用 intelligence_push 逻辑分条 [{report_type}]")
         except Exception as exc:
+            archive_ok = False
             print(f"{log_prefix} intelligence_push 失败，回退原推送：{exc}")
 
     if not batches:
@@ -797,34 +653,39 @@ def send_to_wework(
     if not logical_batches:
         batches = add_batch_headers(batches, header_format_type, batch_size)
 
-    print(f"{log_prefix}消息分为 {len(batches)} 条发送 [{report_type}]")
-    for i, batch_content in enumerate(batches, 1):
-        if is_text_mode:
-            content = strip_markdown(batch_content)
-            payload = {"msgtype": "text", "text": {"content": content}}
-        else:
-            content = batch_content
-            payload = {"msgtype": "markdown", "markdown": {"content": content}}
-        print(f"发送{log_prefix}第 {i}/{len(batches)} 条，大小：{len(content.encode('utf-8'))} 字节 [{report_type}]")
-        try:
-            response = requests.post(
-                webhook_url, headers=headers, json=payload, proxies=proxies, timeout=30
-            )
-            if response.status_code != 200:
-                print(f"{log_prefix}第 {i}/{len(batches)} 条发送失败 [{report_type}]，状态码：{response.status_code}")
-                return False
-            result = response.json()
-            if result.get("errcode") != 0:
-                print(f"{log_prefix}第 {i}/{len(batches)} 条发送失败 [{report_type}]，错误：{result.get('errmsg')}")
-                return False
-            if i < len(batches):
-                time.sleep(batch_interval)
-        except Exception as exc:
-            print(f"{log_prefix}第 {i}/{len(batches)} 条发送出错 [{report_type}]：{exc}")
-            return False
-
-    print(f"{log_prefix}所有 {len(batches)} 条发送完成 [{report_type}]")
-    return True
+    notification_ok = send_wework_messages(
+        [webhook_url],
+        batches,
+        msg_type=msg_type,
+        max_bytes=min(4000, batch_size),
+        interval=batch_interval,
+        proxy_url=proxy_url,
+        label=f"{log_prefix}[{report_type}]",
+    )
+    if notification_ok and not archive_ok:
+        print(f"{log_prefix}通知已发送，但必需的情报归档失败 [{report_type}]")
+    if package is not None:
+        ai_status = (
+            "success"
+            if ai_analysis is not None and getattr(ai_analysis, "success", False)
+            else "degraded" if ai_analysis is not None else "skipped"
+        )
+        summary = {
+            "slot": package.get("slot", ""),
+            "profile": os.environ.get("DAILYANA_PROFILE", ""),
+            "fetched": package.get("candidate_count", 0),
+            "deduplicated": package.get("deduplicated_count", 0),
+            "ai_status": ai_status,
+            "r2_status": "ok" if archive_ok else "failed",
+            "notification_status": "ok" if notification_ok else "failed",
+            "duration_seconds": round(time.monotonic() - started_at, 2),
+            "status": "degraded" if ai_status == "degraded" else "ok",
+        }
+        print(
+            "RAVENIS_RUN_SUMMARY="
+            + json.dumps(summary, ensure_ascii=False, separators=(",", ":"))
+        )
+    return notification_ok and archive_ok
 
 
 def send_to_telegram(

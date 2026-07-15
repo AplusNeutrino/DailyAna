@@ -6,3 +6,9 @@ docs/history/
 __pycache__/
 *.pyc
 .tmp-gh-api/
+.devtools/
+.venv/
+.test-tmp/
+tests/_runtime_history/
+tests/_runtime_history_many/
+tests/_runtime_config/

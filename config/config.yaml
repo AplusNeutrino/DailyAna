@@ -95,41 +95,19 @@ slots:
     time: '06:00'
   B:
     label: 午间
-    time: '12:00'
+    time: '14:15'
   C:
     label: 晚间
-    time: '18:00'
-categories:
-- AI / 模型
-- 芯片 / 算力
-- 自动驾驶 / 机器人
-- 新能源 / 能源
-- 开发者 / 工具 / 开源
-- 宏观 / 财经 / 地缘
-- 国内政策 / 消费 / 社会
-- 娱乐 / 体育 / 游戏
-- 其他
-intents:
-- WORK_CORE
-- WORK_EDGE
-- MARKET
-- POLICY
-- RISK
-- CULTURE
-- NOISE
+    time: '18:10'
 scoring:
-  weights:
-    relevance: 0.3
-    source_quality: 0.2
-    multi_source: 0.2
-    novelty: 0.15
-    impact: 0.15
   thresholds:
     altar: 80
     brief: 60
     list: 30
 intelligence_push:
   enabled: true
+  migration:
+    dual_write_legacy_until: '2026-07-22'
   wechat:
     enable_plain_text_mode: true
     show_urls: false

@@ -6,6 +6,7 @@
 供 analyzer、translator、filter 等模块共享使用。
 """
 
+import os
 from pathlib import Path
 from typing import Tuple
 
@@ -29,8 +30,22 @@ def load_prompt_template(
     Returns:
         (system_prompt, user_prompt_template) 元组
     """
-    config_dir = _CONFIG_ROOT / config_subdir if config_subdir else _CONFIG_ROOT
-    prompt_path = config_dir / prompt_file
+    roots = []
+    private_root = os.environ.get("RAVENIS_PRIVATE_CONFIG_DIR", "").strip()
+    if private_root:
+        roots.append(Path(private_root))
+    roots.append(_CONFIG_ROOT)
+
+    prompt_path = None
+    for root in roots:
+        config_dir = root / config_subdir if config_subdir else root
+        candidate = config_dir / prompt_file
+        if candidate.exists():
+            prompt_path = candidate
+            break
+    if prompt_path is None:
+        config_dir = roots[-1] / config_subdir if config_subdir else roots[-1]
+        prompt_path = config_dir / prompt_file
 
     if not prompt_path.exists():
         print(f"[{label}] 提示词文件不存在: {prompt_path}")

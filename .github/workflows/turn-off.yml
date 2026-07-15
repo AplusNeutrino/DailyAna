@@ -10,10 +10,10 @@ jobs:
   turn-off:
     runs-on: ubuntu-latest
     steps:
-      - name: Disable scheduled crawler
+      - name: Disable production schedules
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh workflow disable crawler.yml --repo "${{ github.repository }}"
-          gh workflow disable crawler-relax.yml --repo "${{ github.repository }}"
-          echo "Ravenis Core scheduled crawlers have been turned off."
+          gh workflow disable ai-digest-daily.yml --repo "${{ github.repository }}"
+          echo "Ravenis Core producer schedules have been turned off."
