@@ -2,24 +2,20 @@ name: Ravenis Core - AI Digest Daily
 
 on:
   schedule:
-    # GitHub cron uses UTC. 03:00 UTC is 11:00 Beijing time.
-    # The upstream digest normally publishes around 08:30-09:00 Beijing time.
-    - cron: "0 3 * * *"
+    - cron: "0 3 * * *" # 11:00 Beijing
   workflow_dispatch:
 
 concurrency:
-  group: ai-digest-daily-${{ github.ref_name }}
-  cancel-in-progress: true
+  group: ravenis-producer-${{ github.ref_name }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 jobs:
   fetch:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
 
     steps:
       - name: Checkout repository
@@ -46,11 +42,10 @@ jobs:
           token: ${{ secrets.RAVENIS_SECRETS_TOKEN }}
           path: .ravenis-secrets
 
-      - name: Overlay private runtime config
-        run: rsync -a .ravenis-secrets/config/ config/
-
-      - name: Fetch AI Digest topics
+      - name: Fetch, archive and notify
         env:
+          RAVENIS_PRIVATE_CONFIG: ${{ github.workspace }}/.ravenis-secrets/config/config.yaml
+          RAVENIS_PRIVATE_CONFIG_DIR: ${{ github.workspace }}/.ravenis-secrets/config
           S3_BUCKET_NAME: ${{ secrets.S3_BUCKET_NAME }}
           S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
           S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
@@ -60,30 +55,7 @@ jobs:
           AI_API_BASE: ${{ secrets.AI_API_BASE }}
           WEWORK_WEBHOOK_URL: ${{ secrets.WEWORK_WEBHOOK_URL }}
           WEWORK_MSG_TYPE: ${{ secrets.WEWORK_MSG_TYPE }}
-          GITHUB_ACTIONS: true
+          RAVENIS_SLOT: DIGEST
+          DAILYANA_PROFILE: work
+          GITHUB_ACTIONS: "true"
         run: uv run python tools/fetch_ai_digest_daily.py --json-snapshot
-
-      - name: Build history search index
-        if: always()
-        continue-on-error: true
-        env:
-          S3_BUCKET_NAME: ${{ secrets.S3_BUCKET_NAME }}
-          S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
-          S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
-          S3_ENDPOINT_URL: ${{ secrets.S3_ENDPOINT_URL }}
-          S3_REGION: ${{ secrets.S3_REGION }}
-        run: uv run python tools/build_history_index.py --retention-days 30 --output docs/history/history-index.json --upload-key history/history-index.json --prune-remote
-
-      - name: Setup GitHub Pages
-        if: always()
-        uses: actions/configure-pages@v5
-
-      - name: Upload GitHub Pages artifact
-        if: always()
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: docs
-
-      - name: Deploy GitHub Pages
-        if: always()
-        uses: actions/deploy-pages@v4

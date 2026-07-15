@@ -8,12 +8,13 @@
 import os
 from copy import deepcopy
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
 
 import yaml
 
-from .config import parse_multi_account_config, validate_paired_configs
 from trendradar.utils.time import DEFAULT_TIMEZONE
+
+from .config import parse_multi_account_config, validate_paired_configs
 
 
 def _get_env_bool(key: str) -> Optional[bool]:
@@ -65,6 +66,46 @@ def _deep_merge_config(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[s
     return merged
 
 
+def _config_search_dirs(config_path: Optional[str] = None) -> list[Path]:
+    """Return private-first config directories, followed by the public default."""
+    public_file = Path(
+        config_path or os.environ.get("CONFIG_PATH", "config/config.yaml")
+    ).resolve()
+    private_dir_value = os.environ.get("RAVENIS_PRIVATE_CONFIG_DIR", "").strip()
+    private_file_value = os.environ.get("RAVENIS_PRIVATE_CONFIG", "").strip()
+    candidates = []
+    if private_dir_value:
+        candidates.append(Path(private_dir_value).resolve())
+    elif private_file_value:
+        candidates.append(Path(private_file_value).resolve().parent)
+    candidates.append(public_file.parent)
+    result = []
+    for candidate in candidates:
+        if candidate not in result:
+            result.append(candidate)
+    return result
+
+
+def resolve_config_resource(relative_path: str, config_path: Optional[str] = None) -> Path:
+    """Resolve a runtime resource using private-first fallback without copying files."""
+    requested = Path(relative_path)
+    if requested.is_absolute():
+        return requested
+    for directory in _config_search_dirs(config_path):
+        candidate = directory / requested
+        if candidate.exists():
+            return candidate
+    return _config_search_dirs(config_path)[-1] / requested
+
+
+def _read_yaml_mapping(path: Path) -> Dict[str, Any]:
+    with path.open("r", encoding="utf-8") as file:
+        data = yaml.safe_load(file) or {}
+    if not isinstance(data, dict):
+        raise ValueError(f"YAML root must be a mapping: {path}")
+    return data
+
+
 def _load_profile_override(config_path: str) -> Dict[str, Any]:
     """Load config/profiles/<DAILYANA_PROFILE>.yaml if requested."""
     profile = _get_env_str("DAILYANA_PROFILE")
@@ -76,20 +117,19 @@ def _load_profile_override(config_path: str) -> Dict[str, Any]:
         print(f"[配置] 忽略无效 DAILYANA_PROFILE: {profile}")
         return {}
 
-    profile_path = Path(config_path).parent / "profiles" / f"{safe_profile}.yaml"
-    if not profile_path.exists():
-        print(f"[配置] Profile 未找到: {profile_path}，使用主配置")
-        return {}
-
-    with open(profile_path, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
-    print(f"[配置] Profile 加载成功: {profile_path}")
-    return data
+    for directory in _config_search_dirs(config_path):
+        profile_path = directory / "profiles" / f"{safe_profile}.yaml"
+        if profile_path.exists():
+            data = _read_yaml_mapping(profile_path)
+            print(f"[config] Loaded profile: {profile_path}")
+            return data
+    print(f"[config] Profile not found: {safe_profile}; using merged base config")
+    return {}
 
 
 def _load_content_categories(config_path: str) -> Dict[str, Any]:
     """Load config/content_categories.yaml if present."""
-    category_path = Path(config_path).parent / "content_categories.yaml"
+    category_path = resolve_config_resource("content_categories.yaml", config_path)
     if not category_path.exists():
         return {}
     with open(category_path, "r", encoding="utf-8") as f:
@@ -204,6 +244,7 @@ def _load_notification_config(config_data: Dict) -> Dict:
     intelligence_push.setdefault("categories", config_data.get("categories", []))
     intelligence_push.setdefault("intents", config_data.get("intents", []))
     intelligence_push.setdefault("scoring", config_data.get("scoring", {}))
+    intelligence_push.setdefault("rules", config_data.get("intelligence_rules", {}))
     intelligence_storage = dict(config_data.get("storage", {}))
     intelligence_storage.update(intelligence_push.get("storage", {}))
     intelligence_push["storage"] = intelligence_storage
@@ -254,7 +295,9 @@ def _load_timeline_data(config_dir: str = "config") -> Dict:
     Returns:
         timeline.yaml 的完整数据，找不到时返回空模板
     """
-    timeline_path = Path(config_dir) / "timeline.yaml"
+    timeline_path = resolve_config_resource(
+        "timeline.yaml", str(Path(config_dir) / "config.yaml")
+    )
     if not timeline_path.exists():
         print(f"[调度] timeline.yaml 未找到: {timeline_path}，使用空模板")
         return {
@@ -372,6 +415,11 @@ def _load_display_config(config_data: Dict) -> Dict:
 def _load_source_digest_config(config_data: Dict) -> Dict:
     """加载多源 AI 整合摘要配置。当前默认关闭，供后续推送整合使用。"""
     digest = config_data.get("source_digest", {})
+    if digest:
+        print(
+            "[config] DEPRECATION: source_digest is not implemented and is ignored; "
+            "it will be removed after this compatibility release"
+        )
     return {
         "ENABLED": digest.get("enabled", False),
         "MAX_ITEMS": int(digest.get("max_items", 30) or 30),
@@ -668,17 +716,37 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
     if not Path(config_path).exists():
         raise FileNotFoundError(f"配置文件 {config_path} 不存在")
 
-    with open(config_path, "r", encoding="utf-8") as f:
-        config_data = yaml.safe_load(f)
+    config_data = _read_yaml_mapping(Path(config_path))
+    print(f"[config] Loaded public defaults: {Path(config_path).resolve()}")
 
-    print(f"配置文件加载成功: {config_path}")
+    private_path_value = os.environ.get("RAVENIS_PRIVATE_CONFIG", "").strip()
+    if private_path_value:
+        private_path = Path(private_path_value).resolve()
+        if not private_path.exists():
+            raise FileNotFoundError(f"Private config does not exist: {private_path}")
+        if private_path != Path(config_path).resolve():
+            config_data = _deep_merge_config(
+                config_data, _read_yaml_mapping(private_path)
+            )
+        print(f"[config] Applied private override: {private_path}")
     profile_override = _load_profile_override(config_path)
     if profile_override:
         config_data = _deep_merge_config(config_data, profile_override)
     config_data = _apply_content_category_filter(config_data, config_path)
+    rules_path = resolve_config_resource("intelligence_rules.yaml", config_path)
+    if rules_path.exists():
+        config_data["intelligence_rules"] = _read_yaml_mapping(rules_path)
+        print(f"[config] Loaded intelligence rules: {rules_path}")
 
     # 合并所有配置
-    config = {}
+    config = {
+        "CONFIG_SOURCES": {
+            "public": str(Path(config_path).resolve()),
+            "private": str(Path(private_path_value).resolve()) if private_path_value else "",
+            "profile": _get_env_str("DAILYANA_PROFILE"),
+            "resource_dirs": [str(path) for path in _config_search_dirs(config_path)],
+        }
+    }
 
     # 应用配置
     config.update(_load_app_config(config_data))

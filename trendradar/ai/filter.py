@@ -9,6 +9,7 @@ AI 智能筛选模块
 
 import hashlib
 import json
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -85,7 +86,12 @@ class AIFilter:
         注意：调用方（context.py）已完成 config/timeline 的合并决策，
         此处不再二次读取 filter_config，避免语义冲突。
         """
-        config_dir = Path(__file__).parent.parent.parent / "config"
+        private_dir = os.environ.get("RAVENIS_PRIVATE_CONFIG_DIR", "").strip()
+        config_dir = (
+            Path(private_dir)
+            if private_dir
+            else Path(__file__).parent.parent.parent / "config"
+        )
         configured_file = interests_file
 
         if configured_file:

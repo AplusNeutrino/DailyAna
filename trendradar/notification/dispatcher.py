@@ -26,13 +26,12 @@ from .senders import (
     send_to_dingtalk,
     send_to_email,
     send_to_feishu,
+    send_to_generic_webhook,
     send_to_ntfy,
     send_to_slack,
     send_to_telegram,
     send_to_wework,
-    send_to_generic_webhook,
 )
-
 
 # 类型检查时导入，运行时不导入（避免循环导入）
 if TYPE_CHECKING:
@@ -170,13 +169,13 @@ class NotificationDispatcher:
         # debug 模式：输出完整 prompt、AI 原始响应、逐条对照
         if self.config.get("DEBUG", False):
             if result.prompt:
-                print(f"[翻译][DEBUG] === 发送给 AI 的 Prompt ===")
+                print("[翻译][DEBUG] === 发送给 AI 的 Prompt ===")
                 print(result.prompt)
-                print(f"[翻译][DEBUG] === Prompt 结束 ===")
+                print("[翻译][DEBUG] === Prompt 结束 ===")
             if result.raw_response:
-                print(f"[翻译][DEBUG] === AI 原始响应 ===")
+                print("[翻译][DEBUG] === AI 原始响应 ===")
                 print(result.raw_response)
-                print(f"[翻译][DEBUG] === 响应结束 ===")
+                print("[翻译][DEBUG] === 响应结束 ===")
             # 行数不匹配警告
             expected = len(titles_to_translate)
             if result.parsed_count != expected:
@@ -348,7 +347,7 @@ class NotificationDispatcher:
             **kwargs: 传递给发送函数的其他参数
 
         Returns:
-            bool: 任一账号发送成功则返回 True
+            bool: 所有已配置账号发送成功才返回 True
         """
         accounts = parse_multi_account_config(config_value)
         if not accounts:
@@ -363,7 +362,7 @@ class NotificationDispatcher:
                 result = send_func(account, account_label=account_label, **kwargs)
                 results.append(result)
 
-        return any(results) if results else False
+        return all(results) if results else False
 
     def _apply_display_regions(
         self,

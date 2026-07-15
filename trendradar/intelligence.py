@@ -8,6 +8,7 @@ the crawler or the old notification path.
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import json
 import os
@@ -15,6 +16,7 @@ import re
 from collections import defaultdict
 from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 try:
     import boto3
@@ -24,57 +26,15 @@ except ImportError:  # pragma: no cover - handled at runtime
     BotoConfig = None
 
 
-CATEGORIES = [
-    "AI / 模型",
-    "芯片 / 算力",
-    "自动驾驶 / 机器人",
-    "新能源 / 能源",
-    "开发者 / 工具 / 开源",
-    "宏观 / 财经 / 地缘",
-    "国内政策 / 消费 / 社会",
-    "娱乐 / 体育 / 游戏",
-    "其他",
-]
-
-INTENTS = ["WORK_CORE", "WORK_EDGE", "MARKET", "POLICY", "RISK", "CULTURE", "NOISE"]
-
-CATEGORY_RULES: List[Tuple[str, List[str]]] = [
-    ("AI / 模型", ["ai", "openai", "gpt", "claude", "gemini", "deepseek", "qwen", "llm", "大模型", "模型", "人工智能", "智谱", "通义", "kimi"]),
-    ("芯片 / 算力", ["芯片", "算力", "英伟达", "nvidia", "gpu", "半导体", "台积电", "华为昇腾", "存储", "hbm", "光刻", "液冷"]),
-    ("自动驾驶 / 机器人", ["机器人", "自动驾驶", "特斯拉", "tesla", "fsd", "智驾", "宇树", "智元", "小鹏", "蔚来"]),
-    ("新能源 / 能源", ["新能源", "电池", "储能", "光伏", "风电", "锂", "能源", "油价", "原油"]),
-    ("开发者 / 工具 / 开源", ["github", "开源", "开发者", "编程", "代码", "数据库", "python", "javascript", "工具", "api"]),
-    ("宏观 / 财经 / 地缘", ["美联储", "通胀", "美股", "港股", "a股", "黄金", "汇率", "财报", "市场", "中东", "伊朗", "美国", "欧洲", "地缘"]),
-    ("国内政策 / 消费 / 社会", ["政策", "监管", "官方", "消费", "食品", "事故", "维权", "社会", "教育", "医疗"]),
-    ("娱乐 / 体育 / 游戏", ["游戏", "电竞", "体育", "足球", "篮球", "电影", "影视", "明星", "演唱会", "b站", "bilibili"]),
-]
-
-TAG_RULES: List[Tuple[str, List[str]]] = [
-    ("DeepSeek", ["deepseek"]),
-    ("Qwen", ["qwen", "通义"]),
-    ("OpenAI", ["openai", "gpt"]),
-    ("Claude", ["claude", "anthropic"]),
-    ("Gemini", ["gemini", "google ai"]),
-    ("英伟达", ["英伟达", "nvidia"]),
-    ("华为昇腾", ["昇腾", "ascend"]),
-    ("芯片", ["芯片", "半导体", "gpu", "hbm"]),
-    ("机器人", ["机器人", "宇树", "智元"]),
-    ("自动驾驶", ["自动驾驶", "fsd", "智驾"]),
-    ("特斯拉", ["特斯拉", "tesla"]),
-    ("宏观", ["美联储", "通胀", "汇率", "黄金"]),
-    ("地缘", ["中东", "伊朗", "美国", "欧洲", "地缘"]),
-    ("游戏", ["游戏", "电竞"]),
-    ("体育", ["体育", "足球", "篮球"]),
-    ("开源", ["开源", "github"]),
-    ("开发工具", ["开发者", "编程", "代码", "api", "数据库"]),
-]
-
-RISK_WORDS = ["事故", "处罚", "监管", "风险", "召回", "造谣", "刑案", "下架", "封禁", "漏洞"]
-POLICY_WORDS = ["政策", "监管", "官方", "法规", "标准", "条例"]
-MARKET_WORDS = ["财报", "股", "涨", "跌", "融资", "并购", "价格", "市值", "订单"]
-SOCIAL_SOURCE_IDS = {"weibo", "douyin", "tieba", "zhihu", "bilibili-hot-search", "toutiao", "baidu"}
-TECH_SOURCE_HINTS = ["hacker", "github", "verge", "arxiv", "tech", "developer", "ruanyifeng", "阮一峰"]
-FINANCE_SOURCE_HINTS = ["finance", "wallstreet", "cls", "财联社", "华尔街", "yahoo"]
+DEFAULT_CATEGORY = "其他"
+PUBLIC_HISTORY_FIELDS = {
+    "id", "short_id", "date", "type", "title", "source", "url", "category",
+    "tags", "score", "first_seen", "last_seen", "occurrence_count", "summary",
+}
+TRACKING_QUERY_KEYS = {
+    "fbclid", "gclid", "spm", "utm_campaign", "utm_content", "utm_medium",
+    "utm_source", "utm_term",
+}
 
 
 def _text(value: Any) -> str:
@@ -87,12 +47,40 @@ def normalize_title(title: str) -> str:
     return title
 
 
+def normalize_url(url: str) -> str:
+    value = _text(url)
+    if not value:
+        return ""
+    try:
+        parts = urlsplit(value)
+    except ValueError:
+        return value
+    if parts.scheme.lower() not in {"http", "https"} or not parts.netloc:
+        return value
+    query = [
+        (key, val)
+        for key, val in parse_qsl(parts.query, keep_blank_values=True)
+        if key.lower() not in TRACKING_QUERY_KEYS and not key.lower().startswith("utm_")
+    ]
+    path = parts.path.rstrip("/") or "/"
+    return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), path, urlencode(sorted(query)), ""))
+
+
 def content_hash(title: str, url: str) -> str:
-    base = _text(url) or normalize_title(title)
+    base = normalize_url(url) or normalize_title(title)
     return hashlib.sha1(base.encode("utf-8", errors="ignore")).hexdigest()[:16]
 
 
 def get_slot(now: datetime, slots: Optional[Dict[str, Any]] = None) -> str:
+    explicit = os.environ.get("RAVENIS_SLOT", "").strip().upper()
+    if explicit:
+        if not re.fullmatch(r"[A-Z][A-Z0-9_-]*", explicit):
+            raise ValueError(f"Invalid RAVENIS_SLOT: {explicit!r}")
+        if slots and explicit not in slots:
+            raise ValueError(f"RAVENIS_SLOT is not configured: {explicit}")
+        return explicit
+    if os.environ.get("GITHUB_ACTIONS", "").lower() == "true":
+        raise ValueError("RAVENIS_SLOT must be set explicitly in GitHub Actions")
     configured = slots or {}
     minute_of_day = now.hour * 60 + now.minute
     best_slot = ""
@@ -116,103 +104,99 @@ def get_slot(now: datetime, slots: Optional[Dict[str, Any]] = None) -> str:
 
 
 def _source_badge(source_name: str, source_type: str, source_id: str) -> str:
-    text = f"{source_name} {source_type} {source_id}".lower()
     if source_type == "rss":
-        if any(x in text for x in TECH_SOURCE_HINTS):
-            return "技"
-        if any(x in text for x in FINANCE_SOURCE_HINTS):
-            return "财"
-        if any(x in text for x in ["game", "游戏"]):
-            return "游"
         return "RSS"
-    if any(x in text for x in FINANCE_SOURCE_HINTS):
-        return "财"
-    if any(x in text for x in ["gov", "policy", "政务", "官方"]):
-        return "政"
-    if any(x in text for x in ["game", "游戏"]):
-        return "游"
-    if any(x in text for x in ["sport", "体育"]):
-        return "体"
-    if any(x in text for x in ["ent", "娱乐", "bilibili", "weibo", "douyin"]):
-        return "娱"
-    if source_id in SOCIAL_SOURCE_IDS:
-        return "热"
-    return "源"
+    return "热" if source_type == "hotlist" else "源"
 
 
-def _classify(title: str, source_name: str, source_type: str) -> Tuple[str, List[str], List[str]]:
+def _classify(
+    title: str,
+    source_name: str,
+    source_type: str,
+    rules: Dict[str, Any],
+) -> Tuple[str, str, List[str], List[str]]:
     haystack = f"{title} {source_name}".lower()
-    category = "其他"
-    for candidate, words in CATEGORY_RULES:
-        if any(word.lower() in haystack for word in words):
-            category = candidate
+    category_id = "other"
+    category = DEFAULT_CATEGORY
+    default_intents: List[str] = ["NOISE"]
+    for candidate in rules.get("categories", []) or []:
+        words = candidate.get("keywords", []) or []
+        if words and any(_text(word).lower() in haystack for word in words):
+            category_id = _text(candidate.get("id")) or "other"
+            category = _text(candidate.get("name")) or DEFAULT_CATEGORY
+            default_intents = list(candidate.get("default_intents", []) or [])
             break
+        if candidate.get("id") == "other":
+            category_id = "other"
+            category = _text(candidate.get("name")) or DEFAULT_CATEGORY
+            default_intents = list(candidate.get("default_intents", []) or ["NOISE"])
 
-    tags = [tag for tag, words in TAG_RULES if any(word.lower() in haystack for word in words)]
-    if not tags and category != "其他":
-        tags.append(category.split(" / ")[0])
+    tags = [
+        tag
+        for tag, words in (rules.get("tags", {}) or {}).items()
+        if any(_text(word).lower() in haystack for word in (words or []))
+    ]
 
-    intents: List[str] = []
-    if category in {"AI / 模型", "芯片 / 算力", "自动驾驶 / 机器人", "开发者 / 工具 / 开源"}:
-        intents.append("WORK_CORE")
-    elif category == "新能源 / 能源":
-        intents.append("WORK_EDGE")
-    if any(word.lower() in haystack for word in MARKET_WORDS):
-        intents.append("MARKET")
-    if any(word.lower() in haystack for word in POLICY_WORDS):
-        intents.append("POLICY")
-    if any(word.lower() in haystack for word in RISK_WORDS):
-        intents.append("RISK")
-    if category == "娱乐 / 体育 / 游戏":
-        intents.append("CULTURE")
-        if source_type != "rss":
-            intents.append("NOISE")
-    if not intents:
-        intents.append("WORK_EDGE" if category != "其他" else "NOISE")
+    intents: List[str] = list(default_intents)
+    for intent, words in (rules.get("intents", {}) or {}).items():
+        if any(_text(word).lower() in haystack for word in (words or [])):
+            intents.append(intent)
 
-    return category, tags[:8], sorted(set(intents), key=intents.index)
+    return category_id, category, tags[:8], sorted(set(intents), key=intents.index)
 
 
-def _source_quality(source_name: str, source_type: str, source_id: str) -> int:
+def _source_quality(
+    source_name: str,
+    source_type: str,
+    source_id: str,
+    rules: Dict[str, Any],
+) -> int:
+    quality = rules.get("source_quality", {}) or {}
     text = f"{source_name} {source_id}".lower()
+    exact = quality.get("sources", {}) or {}
+    if source_id in exact:
+        return int(exact[source_id])
+    for pattern in quality.get("patterns", []) or []:
+        if any(_text(hint).lower() in text for hint in pattern.get("contains", []) or []):
+            return int(pattern.get("score", quality.get("default", 62)))
+    if source_id in set(quality.get("social_sources", []) or []):
+        return int(quality.get("social_score", 52))
     if source_type == "rss":
-        if any(x in text for x in TECH_SOURCE_HINTS):
-            return 88
-        if any(x in text for x in FINANCE_SOURCE_HINTS):
-            return 84
-        return 76
-    if any(x in text for x in FINANCE_SOURCE_HINTS):
-        return 78
-    if source_id in SOCIAL_SOURCE_IDS:
-        return 52
-    return 62
+        return int(quality.get("rss_default", 76))
+    return int(quality.get("default", 62))
 
 
-def _score_item(item: Dict[str, Any]) -> int:
-    category = item.get("category", "其他")
+def _score_item(item: Dict[str, Any], rules: Dict[str, Any], recent_ids: set[str]) -> int:
+    scoring = rules.get("scoring", {}) or {}
+    weights = scoring.get("weights", {}) or {}
+    required = {"relevance", "source_quality", "multi_source", "novelty", "impact"}
+    if set(weights) != required or abs(sum(float(value) for value in weights.values()) - 1.0) > 1e-9:
+        raise ValueError("intelligence scoring weights must define five components and sum to 1.0")
     intents = set(item.get("intent", []))
-    source_quality = _source_quality(item.get("source", ""), item.get("source_type", ""), item.get("source_id", ""))
-    relevance = {
-        "AI / 模型": 95,
-        "芯片 / 算力": 92,
-        "自动驾驶 / 机器人": 88,
-        "开发者 / 工具 / 开源": 84,
-        "新能源 / 能源": 76,
-        "宏观 / 财经 / 地缘": 72,
-        "国内政策 / 消费 / 社会": 58,
-        "娱乐 / 体育 / 游戏": 35,
-        "其他": 35,
-    }.get(category, 35)
+    source_quality = _source_quality(
+        item.get("source", ""), item.get("source_type", ""), item.get("source_id", ""), rules
+    )
+    relevance = int((scoring.get("relevance", {}) or {}).get(item.get("category_id"), 35))
     rank = int(item.get("platform_rank") or 0)
-    rank_bonus = max(0, 18 - min(rank, 18)) if rank else 4
-    novelty = 60
+    if rank:
+        relevance = min(100, relevance + max(0, 10 - min(rank, 10)))
+    independent_sources = max(1, int(item.get("source_count") or 1))
+    multi_source = min(100, 35 + (independent_sources - 1) * 30)
+    novelty = 25 if item.get("id") in recent_ids else 100
     impact = 45
-    if intents & {"MARKET", "POLICY", "RISK"}:
+    if intents & set(scoring.get("impact_intents", []) or []):
         impact += 20
-    if category in {"AI / 模型", "芯片 / 算力", "自动驾驶 / 机器人"}:
-        impact += 14
-    noise_penalty = 18 if "NOISE" in intents else 0
-    raw = relevance * 0.30 + source_quality * 0.20 + 45 * 0.20 + novelty * 0.15 + impact * 0.15 + rank_bonus - noise_penalty
+    impact = min(100, impact)
+    components = {
+        "relevance": relevance,
+        "source_quality": source_quality,
+        "multi_source": multi_source,
+        "novelty": novelty,
+        "impact": impact,
+    }
+    item["score_components"] = components
+    noise_penalty = int(scoring.get("noise_penalty", 0)) if "NOISE" in intents else 0
+    raw = sum(components[name] * float(weights[name]) for name in required) - noise_penalty
     return max(0, min(100, int(round(raw))))
 
 
@@ -313,27 +297,72 @@ def _dedupe_candidates(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]
         title = _text(item.get("title"))
         if not title:
             continue
-        key = _text(item.get("url")) or normalize_title(title)
-        if not key:
+        url_key = normalize_url(item.get("url", ""))
+        title_key = normalize_title(title)
+        keys = [key for key in (f"url:{url_key}" if url_key else "", f"title:{title_key}" if title_key else "") if key]
+        if not keys:
             continue
-        if key in seen:
-            seen[key].setdefault("duplicate_sources", []).append({
+        existing = next((seen[key] for key in keys if key in seen), None)
+        source_entry = {
+            "source": item.get("source", ""),
+            "source_id": item.get("source_id", ""),
+            "source_type": item.get("source_type", ""),
+            "url": normalize_url(item.get("url", "")),
+        }
+        if existing is not None:
+            if source_entry not in existing["sources"]:
+                existing["sources"].append(source_entry)
+            existing["occurrence_count"] += 1
+            captured_at = _text(item.get("captured_at"))
+            if captured_at:
+                existing["first_seen"] = min(existing["first_seen"], captured_at) if existing["first_seen"] else captured_at
+                existing["last_seen"] = max(existing["last_seen"], captured_at) if existing["last_seen"] else captured_at
+            existing.setdefault("duplicate_sources", []).append({
                 "source": item.get("source", ""),
+                "source_id": item.get("source_id", ""),
                 "source_type": item.get("source_type", ""),
                 "url": item.get("url", ""),
             })
+            for key in keys:
+                seen[key] = existing
             continue
-        seen[key] = item
+        item["url"] = url_key or _text(item.get("url"))
+        item["sources"] = [source_entry]
+        item["occurrence_count"] = 1
+        item["first_seen"] = _text(item.get("captured_at"))
+        item["last_seen"] = _text(item.get("captured_at"))
+        for key in keys:
+            seen[key] = item
         ordered.append(item)
+    for item in ordered:
+        independent = {
+            source.get("source_id") or source.get("source") or source.get("url")
+            for source in item.get("sources", [])
+        }
+        item["source_count"] = len({value for value in independent if value}) or 1
     return ordered
 
 
-def _cluster_key(item: Dict[str, Any]) -> str:
-    strong_tags = [tag for tag in item.get("tags", []) if tag not in {"AI", "芯片", "宏观"}]
-    if strong_tags:
-        return f"{item.get('category')}|{strong_tags[0]}"
-    norm = normalize_title(item.get("title", ""))
-    return f"{item.get('category')}|{norm[:10]}"
+def _title_bigrams(title: str) -> set[str]:
+    normalized = normalize_title(title)
+    if len(normalized) < 2:
+        return {normalized} if normalized else set()
+    return {normalized[index:index + 2] for index in range(len(normalized) - 1)}
+
+
+def _title_similarity(left: str, right: str) -> float:
+    left_parts = _title_bigrams(left)
+    right_parts = _title_bigrams(right)
+    union = left_parts | right_parts
+    return len(left_parts & right_parts) / len(union) if union else 0.0
+
+
+def _source_keys(item: Dict[str, Any]) -> set[str]:
+    return {
+        _text(source.get("source_id") or source.get("source") or source.get("url"))
+        for source in item.get("sources", [])
+        if _text(source.get("source_id") or source.get("source") or source.get("url"))
+    }
 
 
 def _make_cluster_title(category: str, tags: List[str], items: List[Dict[str, Any]]) -> str:
@@ -344,27 +373,64 @@ def _make_cluster_title(category: str, tags: List[str], items: List[Dict[str, An
     return _text(items[0].get("title"))[:34] or "未命名事件"
 
 
-def _build_clusters(items: List[Dict[str, Any]], date_compact: str, date_text: str, slot: str, now: datetime,
-                    thresholds: Dict[str, Any]) -> List[Dict[str, Any]]:
-    groups: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
-    for item in items:
-        if item.get("raw_item_score", 0) >= int(thresholds.get("list", 30)):
-            groups[_cluster_key(item)].append(item)
+def _build_clusters(
+    items: List[Dict[str, Any]],
+    date_text: str,
+    slot: str,
+    now: datetime,
+    thresholds: Dict[str, Any],
+    rules: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    cluster_rules = rules.get("clustering", {}) or {}
+    similarity_threshold = float(cluster_rules.get("title_bigram_similarity", 0.55))
+    generic_tags = set(cluster_rules.get("generic_tags", []) or [])
+    min_sources = int(cluster_rules.get("min_distinct_sources", 2))
+    candidates = [item for item in items if item.get("raw_item_score", 0) >= int(thresholds.get("list", 30))]
+    adjacency: Dict[int, set[int]] = defaultdict(set)
+    for left_index, left in enumerate(candidates):
+        for right_index in range(left_index + 1, len(candidates)):
+            right = candidates[right_index]
+            if left.get("category_id") != right.get("category_id"):
+                continue
+            shared_tags = (set(left.get("tags", [])) & set(right.get("tags", []))) - generic_tags
+            if not shared_tags:
+                continue
+            if _title_similarity(left.get("title", ""), right.get("title", "")) < similarity_threshold:
+                continue
+            if len(_source_keys(left) | _source_keys(right)) < min_sources:
+                continue
+            adjacency[left_index].add(right_index)
+            adjacency[right_index].add(left_index)
+
+    groups: List[List[Dict[str, Any]]] = []
+    visited: set[int] = set()
+    for start in sorted(adjacency):
+        if start in visited:
+            continue
+        stack = [start]
+        component = []
+        while stack:
+            index = stack.pop()
+            if index in visited:
+                continue
+            visited.add(index)
+            component.append(candidates[index])
+            stack.extend(adjacency[index] - visited)
+        if len(component) >= 2 and len(set().union(*(_source_keys(item) for item in component))) >= min_sources:
+            groups.append(component)
 
     clusters: List[Dict[str, Any]] = []
-    seq = 1
-    for _key, group in sorted(groups.items(), key=lambda kv: max(x.get("raw_item_score", 0) for x in kv[1]), reverse=True):
-        if len(group) == 1 and group[0].get("raw_item_score", 0) < int(thresholds.get("altar", 80)):
-            continue
+    for seq, group in enumerate(sorted(groups, key=lambda value: max(x.get("raw_item_score", 0) for x in value), reverse=True), 1):
         tags: List[str] = []
         for item in group:
             for tag in item.get("tags", []):
                 if tag not in tags:
                     tags.append(tag)
-        sources = {item.get("source_id") or item.get("source") for item in group}
+        sources = set().union(*(_source_keys(item) for item in group))
         base_score = max(item.get("raw_item_score", 0) for item in group)
-        cluster_score = min(100, base_score + min(12, max(0, len(sources) - 1) * 4) + min(8, max(0, len(group) - 1) * 2))
-        cluster_id = f"{date_compact}{slot}C{seq:02d}"
+        cluster_score = min(100, base_score + min(15, max(0, len(sources) - 1) * 5))
+        member_ids = sorted(item["id"] for item in group)
+        cluster_id = "c_" + hashlib.sha1("\n".join(member_ids).encode("utf-8")).hexdigest()[:16]
         related = [item["id"] for item in group[:6]]
         related_short = [item["short_id"] for item in group[:6]]
         summary = _cluster_summary(group)
@@ -379,6 +445,7 @@ def _build_clusters(items: List[Dict[str, Any]], date_compact: str, date_text: s
             "category": group[0].get("category", "其他"),
             "tags": tags[:10],
             "cluster_score": cluster_score,
+            "source_count": len(sources),
             "signal_strength": "高" if cluster_score >= 80 else "中高" if cluster_score >= 65 else "中",
             "summary": summary,
             "observation": _cluster_observation(group[0].get("category", "其他"), tags),
@@ -387,7 +454,6 @@ def _build_clusters(items: List[Dict[str, Any]], date_compact: str, date_text: s
         for item in group:
             item["cluster_id"] = cluster_id
         clusters.append(cluster)
-        seq += 1
     return clusters
 
 
@@ -426,54 +492,78 @@ def build_intelligence_package(
     config: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     cfg = config or {}
+    rules = cfg.get("rules") or {}
+    if not rules:
+        raise ValueError("intelligence_rules.yaml was not loaded")
     now = now or datetime.now()
     date_text = now.date().isoformat()
     date_compact = now.strftime("%Y%m%d")
     slot = get_slot(now, cfg.get("slots"))
     thresholds = (cfg.get("scoring") or {}).get("thresholds") or {"altar": 80, "brief": 60, "list": 30}
+    recent_ids = set(cfg.get("recent_content_ids", []) or [])
 
-    raw_candidates = _dedupe_candidates(_collect_raw_candidates(report_data, rss_items, rss_new_items, standalone_data))
+    candidates = _collect_raw_candidates(
+        report_data, rss_items, rss_new_items, standalone_data
+    )
+    raw_candidates = _dedupe_candidates(candidates)
     raw_items: List[Dict[str, Any]] = []
     for seq, candidate in enumerate(raw_candidates, 1):
         title = _text(candidate.get("title"))
         source = _text(candidate.get("source"))
         source_type = _text(candidate.get("source_type")) or "hotlist"
         source_id = _text(candidate.get("source_id"))
-        category, tags, intent = _classify(title, source, source_type)
+        category_id, category, tags, intent = _classify(title, source, source_type, rules)
+        stable_id = "r_" + content_hash(title, _text(candidate.get("url")))
+        captured_at = _text(candidate.get("captured_at")) or now.isoformat(timespec="seconds")
         item = {
-            "id": f"{date_compact}{slot}{seq:03d}",
+            "id": stable_id,
             "short_id": f"{slot}{seq:03d}",
             "date": date_text,
             "slot": slot,
             "seq": seq,
             "title": title,
             "normalized_title": normalize_title(title),
-            "url": _text(candidate.get("url")),
+            "url": normalize_url(candidate.get("url", "")),
             "source": source,
             "source_id": source_id,
             "source_type": source_type,
             "source_badge": _source_badge(source, source_type, source_id),
             "platform_rank": int(candidate.get("platform_rank") or 0),
-            "captured_at": _text(candidate.get("captured_at")) or now.isoformat(timespec="seconds"),
+            "captured_at": captured_at,
+            "first_seen": candidate.get("first_seen") or captured_at,
+            "last_seen": candidate.get("last_seen") or captured_at,
+            "occurrence_count": int(candidate.get("occurrence_count") or 1),
+            "source_count": int(candidate.get("source_count") or 1),
+            "sources": candidate.get("sources", []),
+            "category_id": category_id,
             "category": category,
             "tags": tags,
             "intent": intent,
             "cluster_id": "",
-            "content_hash": content_hash(title, _text(candidate.get("url"))),
+            "content_hash": stable_id.removeprefix("r_"),
             "summary": _text(candidate.get("summary")),
             "duplicate_sources": candidate.get("duplicate_sources", []),
             "raw_payload": candidate.get("raw_payload", {}),
         }
-        item["raw_item_score"] = _score_item(item)
+        item["raw_item_score"] = _score_item(item, rules, recent_ids)
         raw_items.append(item)
 
-    clusters = _build_clusters(raw_items, date_compact, date_text, slot, now, thresholds)
+    clusters = _build_clusters(raw_items, date_text, slot, now, thresholds, rules)
+    category_order = [
+        _text(item.get("name"))
+        for item in rules.get("categories", []) or []
+        if _text(item.get("name"))
+    ]
     return {
         "date": date_text,
         "date_compact": date_compact,
         "slot": slot,
         "generated_at": now.isoformat(timespec="seconds"),
         "thresholds": thresholds,
+        "category_order": category_order,
+        "run_status": "ok",
+        "candidate_count": len(candidates),
+        "deduplicated_count": len(raw_candidates),
         "raw_items": raw_items,
         "clusters": clusters,
     }
@@ -484,13 +574,18 @@ def _clip(text: str, limit: int = 88) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "..."
 
 
-def _category_groups(items: List[Dict[str, Any]], min_score: int, max_per_category: int) -> List[Tuple[str, List[Dict[str, Any]]]]:
+def _category_groups(
+    items: List[Dict[str, Any]],
+    category_order: List[str],
+    min_score: int,
+    max_per_category: int,
+) -> List[Tuple[str, List[Dict[str, Any]]]]:
     grouped: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     for item in items:
         if item.get("raw_item_score", 0) >= min_score:
             grouped[item.get("category", "其他")].append(item)
     ordered = []
-    for category in CATEGORIES:
+    for category in category_order:
         group = grouped.get(category)
         if group:
             ordered.append((category, sorted(group, key=lambda x: x.get("raw_item_score", 0), reverse=True)[:max_per_category]))
@@ -562,7 +657,8 @@ def render_wechat_intelligence_messages(package: Dict[str, Any], config: Optiona
     else:
         msg1.append("1. 暂无显著情报速报。")
     msg1.extend(["", "1.2 全部信息列表"])
-    for category, group in _category_groups(raw_items, list_threshold, max_items_per_category):
+    category_order = package.get("category_order") or sorted({item.get("category", DEFAULT_CATEGORY) for item in raw_items})
+    for category, group in _category_groups(raw_items, category_order, list_threshold, max_items_per_category):
         msg1.extend(["", f"【{category}】{len(group)} 条"])
         for item in group:
             msg1.append(f"- {item['short_id']} [{item['source_badge']}] {_clip(item['title'], 58)}")
@@ -646,6 +742,119 @@ def _s3_client_from_config(config: Dict[str, Any]):
     return client, bucket
 
 
+def _public_url(value: Any) -> str:
+    url = _text(value)
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return ""
+    return normalize_url(url) if parts.scheme.lower() in {"http", "https"} and parts.netloc else ""
+
+
+def _public_summary(value: Any) -> str:
+    return re.sub(r"\s+", " ", _text(value))[:280]
+
+
+def build_public_projection(package: Dict[str, Any]) -> Dict[str, Any]:
+    """Build the strict public DTO. Private/raw fields never cross this boundary."""
+    records = []
+    for item in package.get("raw_items", []):
+        records.append({
+            "id": item.get("id", ""),
+            "short_id": item.get("short_id", ""),
+            "date": package.get("date", ""),
+            "type": "news",
+            "title": item.get("title", ""),
+            "source": item.get("source", ""),
+            "url": _public_url(item.get("url", "")),
+            "category": item.get("category", DEFAULT_CATEGORY),
+            "tags": list(item.get("tags", []) or [])[:10],
+            "score": int(item.get("raw_item_score") or 0),
+            "first_seen": item.get("first_seen", ""),
+            "last_seen": item.get("last_seen", ""),
+            "occurrence_count": int(item.get("occurrence_count") or 1),
+            "summary": _public_summary(item.get("summary", "")),
+        })
+    for cluster in package.get("clusters", []):
+        records.append({
+            "id": cluster.get("cluster_id", ""),
+            "short_id": cluster.get("short_cluster_id", ""),
+            "date": package.get("date", ""),
+            "type": "event_cluster",
+            "title": cluster.get("title", ""),
+            "source": f"{int(cluster.get('source_count') or 0)} 个独立来源",
+            "url": "",
+            "category": cluster.get("category", DEFAULT_CATEGORY),
+            "tags": list(cluster.get("tags", []) or [])[:10],
+            "score": int(cluster.get("cluster_score") or 0),
+            "first_seen": cluster.get("created_at", ""),
+            "last_seen": cluster.get("created_at", ""),
+            "occurrence_count": len(cluster.get("related_item_ids", []) or []),
+            "summary": _public_summary(cluster.get("summary", "")),
+        })
+    return {
+        "schema_version": 1,
+        "date": package.get("date", ""),
+        "generated_at": package.get("generated_at", ""),
+        "records": records,
+    }
+
+
+def archive_external_run_to_r2(
+    *,
+    date: str,
+    slot: str,
+    source: str,
+    private_run: Dict[str, Any],
+    public_records: List[Dict[str, Any]],
+    config: Dict[str, Any],
+) -> bool:
+    """Archive one non-crawler producer using the same run/projection contract."""
+    client, bucket = _s3_client_from_config(config)
+    if client is None or not bucket:
+        print(f"[{source}] R2 archive failed: storage credentials are not configured")
+        return False
+    invalid = [sorted(set(record) - PUBLIC_HISTORY_FIELDS) for record in public_records]
+    invalid = [fields for fields in invalid if fields]
+    if invalid:
+        raise ValueError(f"public projection contains forbidden fields: {invalid}")
+    yyyy, mm, dd = date.split("-")
+    run_number = _text(os.environ.get("GITHUB_RUN_ID")) or re.sub(r"\D", "", datetime.now().isoformat())
+    run_id = f"{date.replace('-', '')}-{slot}-{run_number or 'local'}"
+    run_payload = dict(private_run)
+    run_payload.update({"run_id": run_id, "date": date, "slot": slot, "source": source})
+    projection = {
+        "schema_version": 1,
+        "date": date,
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "records": public_records,
+    }
+    try:
+        raw = json.dumps(run_payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        compressed = gzip.compress(raw, compresslevel=6)
+        client.put_object(
+            Bucket=bucket,
+            Key=f"runs/{yyyy}/{mm}/{dd}/{slot}/{run_id}.json.gz",
+            Body=compressed,
+            ContentLength=len(compressed),
+            ContentType="application/json",
+            ContentEncoding="gzip",
+        )
+        body = json.dumps(projection, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        client.put_object(
+            Bucket=bucket,
+            Key=f"public-history/{date}/{source}-{slot}.json",
+            Body=body,
+            ContentLength=len(body),
+            ContentType="application/json; charset=utf-8",
+        )
+        print(f"[{source}] archived run={run_id} public_records={len(public_records)}")
+        return True
+    except Exception as exc:
+        print(f"[{source}] R2 archive failed: {exc}")
+        return False
+
+
 def archive_intelligence_to_r2(package: Dict[str, Any], messages: List[str], config: Optional[Dict[str, Any]] = None) -> bool:
     cfg = config or {}
     archive_cfg = (cfg.get("storage") or {}).get("archive") or {}
@@ -659,6 +868,8 @@ def archive_intelligence_to_r2(package: Dict[str, Any], messages: List[str], con
     date_parts = package["date"].split("-")
     yyyy, mm, dd = date_parts[0], date_parts[1], date_parts[2]
     slot = package["slot"]
+    run_id = _text(os.environ.get("GITHUB_RUN_ID")) or re.sub(r"\D", "", package.get("generated_at", ""))
+    run_id = f"{package['date'].replace('-', '')}-{slot}-{run_id or 'local'}"
 
     def put_json(key: str, obj: Dict[str, Any]) -> None:
         body = json.dumps(obj, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -668,14 +879,41 @@ def archive_intelligence_to_r2(package: Dict[str, Any], messages: List[str], con
         body = text.encode("utf-8")
         client.put_object(Bucket=bucket, Key=key, Body=body, ContentLength=len(body), ContentType="text/plain; charset=utf-8")
 
+    def put_gzip_json(key: str, obj: Dict[str, Any]) -> None:
+        raw = json.dumps(obj, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        body = gzip.compress(raw, compresslevel=6)
+        client.put_object(
+            Bucket=bucket,
+            Key=key,
+            Body=body,
+            ContentLength=len(body),
+            ContentType="application/json",
+            ContentEncoding="gzip",
+        )
+
     try:
-        for item in package.get("raw_items", []):
-            put_json(f"news/{yyyy}/{mm}/{dd}/{slot}/{item['id']}.json", item)
-        for cluster in package.get("clusters", []):
-            put_json(f"clusters/{yyyy}/{mm}/{dd}/{slot}/{cluster['cluster_id']}.json", cluster)
+        run_package = dict(package)
+        run_package["messages"] = messages
+        run_package["run_id"] = run_id
+        put_gzip_json(f"runs/{yyyy}/{mm}/{dd}/{slot}/{run_id}.json.gz", run_package)
+        put_json(
+            f"public-history/{package['date']}/ravenis-{slot}.json",
+            build_public_projection(package),
+        )
+
+        legacy_until = _text((cfg.get("migration") or {}).get("dual_write_legacy_until"))
+        if legacy_until and package["date"] <= legacy_until:
+            for item in package.get("raw_items", []):
+                put_json(f"news/{yyyy}/{mm}/{dd}/{slot}/{item['id']}.json", item)
+            for cluster in package.get("clusters", []):
+                put_json(f"clusters/{yyyy}/{mm}/{dd}/{slot}/{cluster['cluster_id']}.json", cluster)
         for index, message in enumerate(messages):
             put_text(f"reports/{yyyy}/{mm}/{dd}/{slot}/wechat_message_{index}.txt", message)
-        print(f"[intelligence] archived {len(package.get('raw_items', []))} raw items and {len(package.get('clusters', []))} clusters to R2")
+        print(
+            "[intelligence] archived run bundle and public projection: "
+            f"run_id={run_id} items={len(package.get('raw_items', []))} "
+            f"clusters={len(package.get('clusters', []))}"
+        )
         return True
     except Exception as exc:
         print(f"[intelligence] R2 archive failed, notification will continue: {exc}")

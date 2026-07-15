@@ -16,6 +16,7 @@ import json
 import os
 import re
 import sqlite3
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from email.utils import parsedate_to_datetime
@@ -28,16 +29,19 @@ from xml.etree import ElementTree as ET
 import requests
 
 from trendradar.ai.client import AIClient
-from trendradar.core import load_config
+from trendradar.ai_digest_contract import validate_digest_analysis
 from trendradar.context import AppContext
+from trendradar.core import load_config
+from trendradar.core.loader import resolve_config_resource
+from trendradar.intelligence import archive_external_run_to_r2, normalize_url
+from trendradar.notification.wework import send_wework_messages
 from trendradar.storage.base import RSSData, RSSItem
-
 
 FEED_ID = "ai-digest-daily"
 FEED_NAME = "AI Digest Daily"
 DEFAULT_FEED_URL = "https://masiqi.github.io/ai-digest/feed.xml"
 DEFAULT_BASE_URL = "https://masiqi.github.io/ai-digest/"
-DEFAULT_PROMPT_FILE = "config/ai_digest_analysis_prompt.txt"
+DEFAULT_PROMPT_FILE = "ai_digest_analysis_prompt.txt"
 USER_AGENT = "RavenisCore/2.0 AI Digest Daily Archive (https://github.com/AplusNeutrino/DailyAna)"
 
 SECTION_SENTENCE = "一句话"
@@ -738,7 +742,7 @@ def build_wework_message(topics: List[DigestTopic], analysis: Dict[str, Any], da
     item_analysis = analysis.get("items") or {}
     lines = [
         f"## AI Digest {date}",
-        f"> 已完整归档 {len(topics)} 条新闻，图片未抓取；全文已进入历史索引。",
+        f"> 已私有归档 {len(topics)} 条新闻；公开历史仅包含元数据与短摘要。",
         "",
     ]
     status = daily.get("status") or "unknown"
@@ -761,7 +765,7 @@ def build_wework_message(topics: List[DigestTopic], analysis: Dict[str, Any], da
     if len(topics) > 8:
         lines.append(f"- 另有 {len(topics) - 8} 条已归档，可在历史索引检索。")
 
-    lines.extend(["", "历史索引：GitHub Pages / R2 `history/history-index.json`"])
+    lines.extend(["", "历史搜索：GitHub Pages / R2 `history/manifest.json`"])
     return "\n".join(lines)
 
 
@@ -771,36 +775,14 @@ def send_wework_notification(topics: List[DigestTopic], analysis: Dict[str, Any]
         print("[ai-digest] notification skipped: WEWORK_WEBHOOK_URL is not configured")
         return False
 
-    msg_type = (os.environ.get("WEWORK_MSG_TYPE") or "markdown").strip().lower()
-    content = build_wework_message(topics, analysis, date)
-    if msg_type == "text":
-        payload = {"msgtype": "text", "text": {"content": re.sub(r"[*#>`]", "", content)}}
-    else:
-        payload = {"msgtype": "markdown", "markdown": {"content": content}}
-
-    success = True
-    for index, webhook_url in enumerate(webhook_urls, 1):
-        try:
-            response = requests.post(
-                webhook_url,
-                headers={"Content-Type": "application/json"},
-                json=payload,
-                timeout=30,
-            )
-            if response.status_code != 200:
-                print(f"[ai-digest] notification failed #{index}: HTTP {response.status_code}")
-                success = False
-                continue
-            result = response.json()
-            if result.get("errcode") != 0:
-                print(f"[ai-digest] notification failed #{index}: {result.get('errmsg')}")
-                success = False
-                continue
-            print(f"[ai-digest] notification sent #{index}")
-        except Exception as exc:
-            print(f"[ai-digest] notification failed #{index}: {exc}")
-            success = False
-    return success
+    return send_wework_messages(
+        webhook_urls,
+        [build_wework_message(topics, analysis, date)],
+        msg_type=(os.environ.get("WEWORK_MSG_TYPE") or "markdown").strip().lower(),
+        max_bytes=4000,
+        interval=1.0,
+        label="AI Digest 企业微信",
+    )
 
 
 def rebuild_ai_digest_fts(conn: sqlite3.Connection, date: str) -> None:
@@ -872,12 +854,11 @@ def parse_ai_json(response: str) -> Dict[str, Any]:
             raise
 
 
-def validate_analysis_response(parsed: Dict[str, Any]) -> None:
-    if not isinstance(parsed.get("items"), list) or not isinstance(parsed.get("daily"), dict):
-        raise ValueError("AI response must contain items[] and daily{}")
+def validate_analysis_response(parsed: Dict[str, Any], topics: Optional[List[DigestTopic]] = None) -> None:
+    validate_digest_analysis(parsed, (topic.digest_id for topic in topics or []))
 
 
-def run_ai_analysis(storage_manager, config: Dict[str, Any], topics: List[DigestTopic], date: str, no_ai: bool, prompt_file: str) -> None:
+def run_ai_analysis(storage_manager, config: Dict[str, Any], topics: List[DigestTopic], date: str, no_ai: bool, prompt_file: str) -> str:
     ai_config = config.get("AI", {})
     model = ai_config.get("MODEL", "")
     client = AIClient(ai_config)
@@ -885,13 +866,15 @@ def run_ai_analysis(storage_manager, config: Dict[str, Any], topics: List[Digest
     if no_ai:
         save_analysis_skipped(storage_manager, topics, date, model, "AI analysis disabled by --no-ai")
         print("[ai-digest] AI analysis skipped by --no-ai")
-        return
+        return "skipped"
     if not client.api_key:
         save_analysis_skipped(storage_manager, topics, date, model, "AI API key is not configured")
         print("[ai-digest] AI analysis skipped: AI API key is not configured")
-        return
+        return "skipped"
 
     prompt_path = Path(prompt_file)
+    if not prompt_path.exists():
+        prompt_path = resolve_config_resource(Path(prompt_file).name)
     if not prompt_path.exists():
         raise FileNotFoundError(f"AI Digest prompt file not found: {prompt_path}")
 
@@ -911,7 +894,7 @@ def run_ai_analysis(storage_manager, config: Dict[str, Any], topics: List[Digest
         raw_response = client.chat(messages, temperature=0.2)
         parsed = parse_ai_json(raw_response)
         try:
-            validate_analysis_response(parsed)
+            validate_analysis_response(parsed, topics)
         except Exception:
             digest_ids = [topic.digest_id for topic in topics]
             repair_prompt = (
@@ -932,13 +915,56 @@ def run_ai_analysis(storage_manager, config: Dict[str, Any], topics: List[Digest
                 temperature=0,
             )
             parsed = parse_ai_json(repaired_response)
-            validate_analysis_response(parsed)
+            validate_analysis_response(parsed, topics)
             raw_response = repaired_response
         save_analysis_success(storage_manager, topics, date, model, parsed, raw_response)
         print("[ai-digest] AI analysis saved")
+        return "success"
     except Exception as exc:
         save_analysis_failed(storage_manager, topics, date, model, f"{type(exc).__name__}: {exc}", raw_response)
         print(f"[ai-digest] AI analysis failed but archive is preserved: {exc}")
+        return "degraded"
+
+
+def archive_ai_digest_projection(
+    config: Dict[str, Any],
+    topics: List[DigestTopic],
+    analysis: Dict[str, Any],
+    date: str,
+) -> bool:
+    item_analysis = analysis.get("items") or {}
+    records = []
+    for topic in topics:
+        analysis_row = item_analysis.get(topic.digest_id, {})
+        summary = analysis_row.get("summary") or topic.sentence or topic.significance
+        first_seen = topic.published_at or f"{date}T00:00:00"
+        records.append({
+            "id": topic.digest_id,
+            "short_id": f"D{topic.item_index:03d}",
+            "date": date,
+            "type": "ai_digest",
+            "title": topic.title,
+            "source": FEED_NAME,
+            "url": normalize_url(topic.primary_url or topic.page_url),
+            "category": "AI / 模型",
+            "tags": list(analysis_row.get("tags") or [])[:10],
+            "score": int(analysis_row.get("score") or 0),
+            "first_seen": first_seen,
+            "last_seen": first_seen,
+            "occurrence_count": 1,
+            "summary": truncate_text(summary, 280),
+        })
+    return archive_external_run_to_r2(
+        date=date,
+        slot="DIGEST",
+        source="ai-digest",
+        private_run={
+            "topics": [topic.to_archive_dict() for topic in topics],
+            "analysis": analysis,
+        },
+        public_records=records,
+        config=config.get("INTELLIGENCE_PUSH") or {},
+    )
 
 
 def write_json_snapshot(topics: List[DigestTopic], digest_item: Dict[str, str], date: str) -> Path:
@@ -968,6 +994,7 @@ def main() -> int:
     parser.add_argument("--prompt-file", default=DEFAULT_PROMPT_FILE)
     args = parser.parse_args()
 
+    started_at = time.monotonic()
     config = load_config()
     ctx = AppContext(config)
     storage = ctx.get_storage_manager()
@@ -1010,14 +1037,39 @@ def main() -> int:
             return 1
         print(f"[ai-digest] saved {len(topics)} RSS compatibility items as {FEED_ID}")
 
-        run_ai_analysis(storage, config, topics, target_date, args.no_ai, args.prompt_file)
+        ai_status = run_ai_analysis(storage, config, topics, target_date, args.no_ai, args.prompt_file)
         analysis_snapshot = load_saved_analysis(storage, topics, target_date)
-        send_wework_notification(topics, analysis_snapshot, target_date)
+        storage_ok = storage.end_batch()
+        batch_started = False
+        archive_ok = archive_ai_digest_projection(config, topics, analysis_snapshot, target_date)
+        notification_ok = send_wework_notification(topics, analysis_snapshot, target_date)
 
         if args.json_snapshot:
             snapshot = write_json_snapshot(topics, digest_item, target_date)
             print(f"[ai-digest] wrote snapshot: {snapshot}")
 
+        summary = {
+            "slot": "DIGEST",
+            "profile": os.environ.get("DAILYANA_PROFILE", "work"),
+            "fetched": len(topics),
+            "deduplicated": len(topics),
+            "ai_status": ai_status,
+            "r2_status": "ok" if archive_ok else "failed",
+            "primary_storage_status": "ok" if storage_ok else "failed",
+            "notification_status": "ok" if notification_ok else "failed",
+            "duration_seconds": round(time.monotonic() - started_at, 2),
+            "status": "degraded" if ai_status == "degraded" else "ok",
+        }
+        print("RAVENIS_RUN_SUMMARY=" + json.dumps(summary, ensure_ascii=False, separators=(",", ":")))
+        if not notification_ok:
+            print("[ai-digest] required WeWork notification failed")
+            return 1
+        if not archive_ok:
+            print("[ai-digest] notification was sent, but required R2 projection archive failed")
+            return 1
+        if not storage_ok:
+            print("[ai-digest] required primary storage upload failed")
+            return 1
         return 0
     finally:
         if batch_started:
