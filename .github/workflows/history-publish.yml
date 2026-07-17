@@ -10,11 +10,9 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
-  group: ravenis-pages
+  group: ravenis-history-publish
   cancel-in-progress: false
 
 jobs:
@@ -22,10 +20,6 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 8
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -45,16 +39,13 @@ jobs:
           S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
           S3_ENDPOINT_URL: ${{ secrets.S3_ENDPOINT_URL }}
           S3_REGION: ${{ secrets.S3_REGION }}
-        run: python tools/build_history_index.py --retention-days 30 --output-dir docs/history --upload-key history/manifest.json
+        run: python tools/build_history_index.py --retention-days 30 --output-dir docs/history --upload-key history/manifest.json --release-prefix history/releases --pointer-key history/current.json
 
-      - name: Setup GitHub Pages
-        uses: actions/configure-pages@v5
-
-      - name: Upload GitHub Pages artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: docs
-
-      - name: Deploy GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+      - name: Trigger Neutriverse Ravenis deployment
+        env:
+          GH_TOKEN: ${{ secrets.NEUTRIVERSE_DISPATCH_TOKEN }}
+        run: >-
+          gh api repos/AplusNeutrino/My_Blog/dispatches
+          --method POST
+          -f event_type=ravenis-history-published
+          -f client_payload[producer_run_id]=${{ github.run_id }}

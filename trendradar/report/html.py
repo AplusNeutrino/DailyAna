@@ -6,11 +6,11 @@ HTML 报告渲染模块
 """
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Callable
+from typing import Any, Callable, Dict, List, Optional
 
-from trendradar.report.helpers import html_escape, calculate_rank_trend
-from trendradar.utils.time import convert_time_for_display
 from trendradar.ai.formatter import render_ai_analysis_html_rich
+from trendradar.report.helpers import calculate_rank_trend, html_escape
+from trendradar.utils.time import convert_time_for_display
 
 
 def render_html_content(

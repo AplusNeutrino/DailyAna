@@ -5,12 +5,12 @@
 """
 
 import os
-import sys
-import subprocess
-import time
 import signal
-from pathlib import Path
+import subprocess
+import sys
+import time
 from datetime import datetime
+from pathlib import Path
 
 # Web 服务器配置
 WEBSERVER_PORT = int(os.environ.get("WEBSERVER_PORT", "8080"))
@@ -124,7 +124,7 @@ def parse_cron_schedule(cron_expr):
             else:
                 return f"复杂表达式: {cron_expr}"
     
-    except Exception as e:
+    except Exception:
         return f"解析失败: {cron_expr}"
 
 
@@ -154,7 +154,7 @@ def show_status():
     run_mode = os.environ.get("RUN_MODE", "未设置")
     immediate_run = os.environ.get("IMMEDIATE_RUN", "未设置")
     
-    print(f"  ⚙️ 运行配置:")
+    print("  ⚙️ 运行配置:")
     print(f"    CRON_SCHEDULE: {cron_schedule}")
     
     # 解析并显示cron表达式的含义
@@ -230,7 +230,7 @@ def show_status():
                     else:
                         print(f"    PID 1 运行时间: {uptime_minutes} 分钟 ({uptime_seconds} 秒)")
                 else:
-                    print(f"    PID 1 运行时间: 无法精确计算")
+                    print("    PID 1 运行时间: 无法精确计算")
             else:
                 print("    ❌ 无法解析 PID 1 统计信息")
     except Exception as e:
@@ -561,7 +561,7 @@ def start_webserver():
             # 进程异常时优先尝试终止旧进程，避免端口占用导致重启失败
             _terminate_webserver_process(old_pid, require_expected=True)
             _cleanup_stale_pid()
-            print(f"  ℹ️ 检测到失效的 PID 文件，已清理")
+            print("  ℹ️ 检测到失效的 PID 文件，已清理")
 
         except Exception as e:
             print(f"  ⚠️ 清理旧的 PID 文件: {e}")
@@ -598,7 +598,7 @@ def start_webserver():
             print(f"  📄 首页: http://localhost:{WEBSERVER_PORT}/index.html")
             print("  💡 停止服务: python manage.py stop_webserver")
         else:
-            print(f"  ❌ Web 服务器启动失败")
+            print("  ❌ Web 服务器启动失败")
     except Exception as e:
         print(f"  ❌ 启动失败: {e}")
 
@@ -632,7 +632,7 @@ def webserver_status():
 
     if not Path(WEBSERVER_PID_FILE).exists():
         print("  ⭕ 未运行")
-        print(f"  💡 启动服务: python manage.py start_webserver")
+        print("  💡 启动服务: python manage.py start_webserver")
         return
 
     try:
@@ -647,7 +647,7 @@ def webserver_status():
             print(f"  📄 首页: http://localhost:{WEBSERVER_PORT}/index.html")
             print("  💡 停止服务: python manage.py stop_webserver")
         else:
-            print(f"  ⭕ 未运行 (PID 文件存在但进程不可用)")
+            print("  ⭕ 未运行 (PID 文件存在但进程不可用)")
             _cleanup_stale_pid()
             print("  💡 启动服务: python manage.py start_webserver")
     except Exception as e:

@@ -7,7 +7,7 @@
 
 from typing import Dict
 
-from trendradar.report.helpers import clean_title, html_escape, format_rank_display
+from trendradar.report.helpers import clean_title, format_rank_display, html_escape
 
 
 def format_title_for_platform(

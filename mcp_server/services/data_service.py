@@ -9,9 +9,9 @@ from collections import Counter
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
+from ..utils.errors import DataNotFoundError
 from .cache_service import get_cache
 from .parser_service import ParserService
-from ..utils.errors import DataNotFoundError
 
 
 class DataService:

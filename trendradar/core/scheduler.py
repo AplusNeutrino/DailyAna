@@ -9,9 +9,8 @@
 import copy
 import re
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional
-
 from datetime import datetime
+from typing import Any, Callable, Dict, List, Optional
 
 
 @dataclass

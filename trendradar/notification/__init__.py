@@ -16,36 +16,36 @@
 - dispatcher: 多账号通知调度器
 """
 
-from trendradar.notification.formatters import (
-    strip_markdown,
-    convert_markdown_to_mrkdwn,
-)
 from trendradar.notification.batch import (
+    add_batch_headers,
     get_batch_header,
     get_max_batch_header_size,
     truncate_to_bytes,
-    add_batch_headers,
-)
-from trendradar.notification.renderer import (
-    render_feishu_content,
-    render_dingtalk_content,
-)
-from trendradar.notification.splitter import (
-    split_content_into_batches,
-    DEFAULT_BATCH_SIZES,
-)
-from trendradar.notification.senders import (
-    send_to_feishu,
-    send_to_dingtalk,
-    send_to_wework,
-    send_to_telegram,
-    send_to_email,
-    send_to_ntfy,
-    send_to_bark,
-    send_to_slack,
-    SMTP_CONFIGS,
 )
 from trendradar.notification.dispatcher import NotificationDispatcher
+from trendradar.notification.formatters import (
+    convert_markdown_to_mrkdwn,
+    strip_markdown,
+)
+from trendradar.notification.renderer import (
+    render_dingtalk_content,
+    render_feishu_content,
+)
+from trendradar.notification.senders import (
+    SMTP_CONFIGS,
+    send_to_bark,
+    send_to_dingtalk,
+    send_to_email,
+    send_to_feishu,
+    send_to_ntfy,
+    send_to_slack,
+    send_to_telegram,
+    send_to_wework,
+)
+from trendradar.notification.splitter import (
+    DEFAULT_BATCH_SIZES,
+    split_content_into_batches,
+)
 
 __all__ = [
     # 格式转换

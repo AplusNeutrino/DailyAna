@@ -14,6 +14,7 @@ import json
 import os
 import re
 from collections import defaultdict
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -28,13 +29,47 @@ except ImportError:  # pragma: no cover - handled at runtime
 
 DEFAULT_CATEGORY = "其他"
 PUBLIC_HISTORY_FIELDS = {
-    "id", "short_id", "date", "type", "title", "source", "url", "category",
+    "id", "short_id", "date", "type", "title", "source", "source_count", "url", "category",
     "tags", "score", "first_seen", "last_seen", "occurrence_count", "summary",
 }
 TRACKING_QUERY_KEYS = {
     "fbclid", "gclid", "spm", "utm_campaign", "utm_content", "utm_medium",
     "utm_source", "utm_term",
 }
+
+
+class TitleIntegrityError(ValueError):
+    """Raised when a complete title cannot fit within one transport payload."""
+
+
+@dataclass(frozen=True)
+class DigestTopItem:
+    id: str
+    headline: str
+    event: str
+    impact: str
+    watch: str
+    evidence_ids: Tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class DigestWatchItem:
+    text: str
+    evidence_ids: Tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class DigestSummary:
+    overview: str
+    top_items: Tuple[DigestTopItem, ...]
+    watchlist: Tuple[DigestWatchItem, ...]
+    status: str = "rules"
+
+    def to_dict(self) -> Dict[str, Any]:
+        payload = asdict(self)
+        payload["top_items"] = [dict(item) for item in payload["top_items"]]
+        payload["watchlist"] = [dict(item) for item in payload["watchlist"]]
+        return payload
 
 
 def _text(value: Any) -> str:
@@ -45,6 +80,17 @@ def normalize_title(title: str) -> str:
     title = re.sub(r"\s+", " ", _text(title)).lower()
     title = re.sub(r"[^\w\u4e00-\u9fff]+", "", title)
     return title
+
+
+def normalize_display_title(title: Any) -> str:
+    """Normalize presentation noise without removing or rewriting title meaning."""
+    value = re.sub(r"\s+", " ", _text(title))
+    marker_pattern = r"(?P<marker>(?:\[[^\]\n]{1,20}\]|【[^】\n]{1,20}】))(?:\s*(?P=marker))+"
+    previous = None
+    while value != previous:
+        previous = value
+        value = re.sub(marker_pattern, r"\g<marker>", value)
+    return value
 
 
 def normalize_url(url: str) -> str:
@@ -64,6 +110,37 @@ def normalize_url(url: str) -> str:
     ]
     path = parts.path.rstrip("/") or "/"
     return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), path, urlencode(sorted(query)), ""))
+
+
+def _publisher_token(value: Any) -> str:
+    return re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", _text(value).lower())
+
+
+def _publisher_key(source: Any, source_id: Any, url: Any, rules: Dict[str, Any]) -> str:
+    """Return one configured identity for scoring, counting, and display attribution."""
+    source_token = _publisher_token(source)
+    source_id_token = _publisher_token(source_id)
+    observed = {token for token in (source_token, source_id_token) if token}
+    aliases = rules.get("publisher_aliases", {}) or {}
+    for canonical, values in aliases.items():
+        alias_tokens = {
+            _publisher_token(value)
+            for value in [canonical, *(values or [])]
+            if _publisher_token(value)
+        }
+        if observed & alias_tokens:
+            return _publisher_token(canonical)
+    if source_id_token:
+        return f"id:{source_id_token}"
+    if source_token:
+        return f"name:{source_token}"
+    normalized_url = normalize_url(_text(url))
+    if normalized_url:
+        try:
+            return f"host:{urlsplit(normalized_url).netloc.lower()}"
+        except ValueError:
+            pass
+    return "unknown"
 
 
 def content_hash(title: str, url: str) -> str:
@@ -290,7 +367,9 @@ def _collect_raw_candidates(report_data: Dict[str, Any], rss_items: Optional[Lis
     return candidates
 
 
-def _dedupe_candidates(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _dedupe_candidates(
+    candidates: List[Dict[str, Any]], rules: Dict[str, Any]
+) -> List[Dict[str, Any]]:
     seen: Dict[str, Dict[str, Any]] = {}
     ordered: List[Dict[str, Any]] = []
     for item in candidates:
@@ -305,12 +384,19 @@ def _dedupe_candidates(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]
         existing = next((seen[key] for key in keys if key in seen), None)
         source_entry = {
             "source": item.get("source", ""),
+            "publisher_key": _publisher_key(
+                item.get("source"), item.get("source_id"), item.get("url"), rules
+            ),
             "source_id": item.get("source_id", ""),
             "source_type": item.get("source_type", ""),
             "url": normalize_url(item.get("url", "")),
         }
         if existing is not None:
-            if source_entry not in existing["sources"]:
+            source_keys = {
+                _text(source.get("publisher_key"))
+                for source in existing["sources"]
+            }
+            if source_entry["publisher_key"] not in source_keys:
                 existing["sources"].append(source_entry)
             existing["occurrence_count"] += 1
             captured_at = _text(item.get("captured_at"))
@@ -322,6 +408,7 @@ def _dedupe_candidates(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]
                 "source_id": item.get("source_id", ""),
                 "source_type": item.get("source_type", ""),
                 "url": item.get("url", ""),
+                "publisher_key": source_entry["publisher_key"],
             })
             for key in keys:
                 seen[key] = existing
@@ -336,7 +423,7 @@ def _dedupe_candidates(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]
         ordered.append(item)
     for item in ordered:
         independent = {
-            source.get("source_id") or source.get("source") or source.get("url")
+            source.get("publisher_key")
             for source in item.get("sources", [])
         }
         item["source_count"] = len({value for value in independent if value}) or 1
@@ -359,9 +446,9 @@ def _title_similarity(left: str, right: str) -> float:
 
 def _source_keys(item: Dict[str, Any]) -> set[str]:
     return {
-        _text(source.get("source_id") or source.get("source") or source.get("url"))
+        _text(source.get("publisher_key") or source.get("source_id") or source.get("source") or source.get("url"))
         for source in item.get("sources", [])
-        if _text(source.get("source_id") or source.get("source") or source.get("url"))
+        if _text(source.get("publisher_key") or source.get("source_id") or source.get("source") or source.get("url"))
     }
 
 
@@ -505,10 +592,10 @@ def build_intelligence_package(
     candidates = _collect_raw_candidates(
         report_data, rss_items, rss_new_items, standalone_data
     )
-    raw_candidates = _dedupe_candidates(candidates)
+    raw_candidates = _dedupe_candidates(candidates, rules)
     raw_items: List[Dict[str, Any]] = []
     for seq, candidate in enumerate(raw_candidates, 1):
-        title = _text(candidate.get("title"))
+        title = normalize_display_title(candidate.get("title"))
         source = _text(candidate.get("source"))
         source_type = _text(candidate.get("source_type")) or "hotlist"
         source_id = _text(candidate.get("source_id"))
@@ -571,7 +658,241 @@ def build_intelligence_package(
 
 def _clip(text: str, limit: int = 88) -> str:
     text = re.sub(r"\s+", " ", _text(text))
-    return text if len(text) <= limit else text[: limit - 1] + "..."
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def select_digest_candidates(package: Dict[str, Any], max_candidates: int = 12) -> List[Dict[str, Any]]:
+    """Select the bounded, rule-ranked evidence set shown to the summary model."""
+    limit = max(1, min(int(max_candidates or 12), 12))
+    return sorted(
+        package.get("raw_items", []) or [],
+        key=lambda item: (
+            int(item.get("raw_item_score") or 0),
+            int(item.get("source_count") or 1),
+            int(item.get("occurrence_count") or 1),
+            _text(item.get("last_seen")),
+        ),
+        reverse=True,
+    )[:limit]
+
+
+def _select_top_items(candidates: List[Dict[str, Any]], limit: int) -> List[Dict[str, Any]]:
+    selected: List[Dict[str, Any]] = []
+    per_category: Dict[str, int] = defaultdict(int)
+    categories = {_text(item.get("category")) for item in candidates if _text(item.get("category"))}
+    for item in candidates:
+        category = _text(item.get("category")) or DEFAULT_CATEGORY
+        if per_category[category] >= 2:
+            continue
+        if len(selected) == 1 and len(categories) > 1 and category == _text(selected[0].get("category")):
+            continue
+        selected.append(item)
+        per_category[category] += 1
+        if len(selected) >= limit:
+            return selected
+    for item in candidates:
+        if item in selected:
+            continue
+        category = _text(item.get("category")) or DEFAULT_CATEGORY
+        if per_category[category] >= 2:
+            continue
+        selected.append(item)
+        per_category[category] += 1
+        if len(selected) >= limit:
+            break
+    return selected
+
+
+def _rule_watch(item: Dict[str, Any]) -> str:
+    category = _text(item.get("category"))
+    rules = {
+        "AI / 模型": "观察是否出现产品发布、调用价格、客户采用或开发者迁移。",
+        "芯片 / 算力": "观察是否出现供货、价格、订单、产能或监管数据。",
+        "自动驾驶 / 机器人": "观察是否出现订单、量产、事故责任或监管细则。",
+        "宏观 / 财经 / 地缘": "观察是否继续传导至利率、汇率或科技资产价格。",
+        "开发者 / 工具 / 开源": "观察是否出现版本发布、真实迁移或商业化数据。",
+    }
+    if category in rules:
+        return _clip(rules[category], 40)
+    return "观察是否出现第二来源、正式数据或明确后续进展。"
+
+
+def _rule_evidence(item: Dict[str, Any]) -> str:
+    source_count = max(1, int(item.get("source_count") or 1))
+    score = int(item.get("raw_item_score") or 0)
+    novelty = int((item.get("score_components") or {}).get("novelty") or 0)
+    occurrence_count = max(1, int(item.get("occurrence_count") or 1))
+    parts = ["本时段首次出现" if novelty >= 100 else f"累计出现 {occurrence_count} 次"]
+    if source_count >= 2:
+        parts.append(f"{source_count} 个独立发布者")
+    else:
+        parts.append("单一发布者")
+    if score:
+        parts.append(f"综合评分 {score}")
+    return " · ".join(parts)
+
+
+def build_rule_digest_summary(
+    package: Dict[str, Any], config: Optional[Dict[str, Any]] = None
+) -> DigestSummary:
+    cfg = config or {}
+    wechat = cfg.get("wechat") or {}
+    summary_cfg = cfg.get("summary") or {}
+    max_candidates = int(summary_cfg.get("max_candidates", 12))
+    max_top = max(1, min(int(wechat.get("max_top_items", 3)), 3))
+    max_watch = max(0, min(int(wechat.get("max_watch_items", 2)), 2))
+    candidates = select_digest_candidates(package, max_candidates)
+    selected = _select_top_items(candidates, max_top)
+    top_items = tuple(
+        DigestTopItem(
+            id=_text(item.get("id")),
+            headline=normalize_display_title(item.get("title", "")),
+            event="",
+            impact=_rule_evidence(item),
+            watch=_rule_watch(item),
+            evidence_ids=(_text(item.get("id")),),
+        )
+        for item in selected
+        if _text(item.get("id")) and _text(item.get("title"))
+    )
+    selected_ids = {item.id for item in top_items}
+    watch_items: List[DigestWatchItem] = []
+    seen_watch_text: set[str] = set()
+    for item in candidates:
+        item_id = _text(item.get("id"))
+        if not item_id or item_id in selected_ids:
+            continue
+        text = _rule_watch(item)
+        if text in seen_watch_text:
+            continue
+        seen_watch_text.add(text)
+        watch_items.append(DigestWatchItem(text=text, evidence_ids=(item_id,)))
+        if len(watch_items) >= max_watch:
+            break
+    categories = list(dict.fromkeys(_text(item.get("category")) for item in selected if _text(item.get("category"))))
+    if top_items:
+        focus = "、".join(categories[:3]) or "高分条目"
+        overview = _clip(f"本时段重点集中在{focus}。", 80)
+    else:
+        overview = "本时段无新增强信号。"
+    return DigestSummary(overview, top_items, tuple(watch_items), status="rules")
+
+
+_GENERIC_SUMMARY_VALUES = {
+    "值得关注", "值得观察", "持续观察", "可能影响", "后续观察", "需持续观察",
+    "该事件值得关注", "该事件值得观察", "暂无", "无",
+}
+
+
+def _validated_digest_text(value: Any, limit: int, field: str) -> str:
+    text = _clip(value, limit)
+    compact = re.sub(r"[\s，。；：、,.!?！？]", "", text)
+    if not text:
+        raise ValueError(f"digest {field} is empty")
+    if compact in {re.sub(r"[\s，。；：、,.!?！？]", "", value) for value in _GENERIC_SUMMARY_VALUES}:
+        raise ValueError(f"digest {field} is generic")
+    return text
+
+
+def _validate_digest_source_claim(text: str, source_count: int) -> None:
+    claimed_counts = {
+        int(value)
+        for value in re.findall(r"(\d+)\s*个(?:独立)?(?:来源|发布者)", text)
+    }
+    if claimed_counts and claimed_counts != {source_count}:
+        raise ValueError("digest source count contradicts canonical publishers")
+    if source_count == 1 and re.search(r"多源|多个(?:独立)?(?:来源|发布者)", text):
+        raise ValueError("digest claims multiple publishers for a single-publisher item")
+    if source_count > 1 and re.search(r"单一(?:来源|发布者)", text):
+        raise ValueError("digest claims a single publisher for multi-publisher evidence")
+
+
+def validate_digest_summary(
+    raw_summary: Any,
+    package: Dict[str, Any],
+    config: Optional[Dict[str, Any]] = None,
+) -> DigestSummary:
+    """Fail closed when model output is untraceable, generic, or exceeds the public contract."""
+    cfg = config or {}
+    wechat = cfg.get("wechat") or {}
+    summary_cfg = cfg.get("summary") or {}
+    candidates = select_digest_candidates(package, int(summary_cfg.get("max_candidates", 12)))
+    allowed_ids = {_text(item.get("id")) for item in candidates}
+    payload = raw_summary.get("digest_summary") if isinstance(raw_summary, dict) and "digest_summary" in raw_summary else raw_summary
+    if not isinstance(payload, dict):
+        raise ValueError("digest summary must be an object")
+    if set(payload) - {"overview", "top_items", "watchlist"}:
+        raise ValueError("digest summary contains unknown fields")
+    overview = _validated_digest_text(payload.get("overview"), 80, "overview")
+    raw_top = payload.get("top_items")
+    if not isinstance(raw_top, list) or not raw_top:
+        raise ValueError("digest top_items must be a non-empty list")
+    max_top = max(1, min(int(wechat.get("max_top_items", 3)), 3))
+    top_items: List[DigestTopItem] = []
+    seen_ids: set[str] = set()
+    allowed_top_fields = {"id", "headline", "event", "impact", "watch", "evidence_ids"}
+    for raw_item in raw_top[:max_top]:
+        if not isinstance(raw_item, dict) or set(raw_item) - allowed_top_fields:
+            raise ValueError("digest top item has an invalid shape")
+        item_id = _text(raw_item.get("id"))
+        if item_id not in allowed_ids or item_id in seen_ids:
+            raise ValueError(f"digest references unknown or duplicate id: {item_id}")
+        raw_evidence = raw_item.get("evidence_ids") or []
+        if isinstance(raw_evidence, str):
+            raw_evidence = [raw_evidence]
+        evidence = tuple(
+            dict.fromkeys(
+                [item_id, *(_text(value) for value in raw_evidence if _text(value))]
+            )
+        )
+        if any(value not in allowed_ids for value in evidence):
+            raise ValueError(f"digest evidence ids are invalid for {item_id}")
+        impact = _validated_digest_text(raw_item.get("impact"), 56, "impact")
+        source_count = len(_digest_item_sources(evidence, package)) or 1
+        _validate_digest_source_claim(impact, source_count)
+        top_items.append(DigestTopItem(
+            id=item_id,
+            headline=_validated_digest_text(raw_item.get("headline"), 24, "headline"),
+            event=_validated_digest_text(raw_item.get("event"), 56, "event"),
+            impact=impact,
+            watch=_validated_digest_text(raw_item.get("watch"), 40, "watch"),
+            evidence_ids=evidence,
+        ))
+        seen_ids.add(item_id)
+    raw_watch = payload.get("watchlist") or []
+    if not isinstance(raw_watch, list):
+        raise ValueError("digest watchlist must be a list")
+    max_watch = max(0, min(int(wechat.get("max_watch_items", 2)), 2))
+    watchlist: List[DigestWatchItem] = []
+    for raw_item in raw_watch[:max_watch]:
+        if not isinstance(raw_item, dict) or set(raw_item) - {"text", "evidence_ids"}:
+            raise ValueError("digest watch item has an invalid shape")
+        raw_evidence = raw_item.get("evidence_ids") or []
+        if isinstance(raw_evidence, str):
+            raw_evidence = [raw_evidence]
+        evidence = tuple(
+            dict.fromkeys(_text(value) for value in raw_evidence if _text(value))
+        )
+        if not evidence or any(value not in allowed_ids for value in evidence):
+            raise ValueError("digest watch item references unknown evidence")
+        watchlist.append(DigestWatchItem(
+            text=_validated_digest_text(raw_item.get("text"), 40, "watchlist"),
+            evidence_ids=evidence,
+        ))
+    return DigestSummary(overview, tuple(top_items), tuple(watchlist), status="ai")
+
+
+def build_digest_summary(
+    package: Dict[str, Any],
+    raw_summary: Any = None,
+    config: Optional[Dict[str, Any]] = None,
+) -> DigestSummary:
+    if raw_summary:
+        try:
+            return validate_digest_summary(raw_summary, package, config)
+        except (TypeError, ValueError) as exc:
+            print(f"[intelligence] AI digest rejected, using traceable rule summary: {exc}")
+    return build_rule_digest_summary(package, config)
 
 
 def _category_groups(
@@ -609,8 +930,8 @@ def _split_lines(text: str, max_bytes: int) -> List[str]:
     return batches
 
 
-def render_wechat_intelligence_messages(package: Dict[str, Any], config: Optional[Dict[str, Any]] = None,
-                                        max_bytes: int = 4000) -> List[str]:
+def _render_legacy_wechat_intelligence_messages(package: Dict[str, Any], config: Optional[Dict[str, Any]] = None,
+                                                max_bytes: int = 4000) -> List[str]:
     cfg = config or {}
     wechat = cfg.get("wechat") or {}
     thresholds = package.get("thresholds") or {}
@@ -686,6 +1007,311 @@ def render_wechat_intelligence_messages(package: Dict[str, Any], config: Optiona
     return [message for message in messages if message.strip()]
 
 
+def _digest_item_sources(item_ids: Iterable[str], package: Dict[str, Any]) -> List[str]:
+    item_by_id = {_text(item.get("id")): item for item in package.get("raw_items", []) or []}
+    names: List[str] = []
+    seen_keys: set[str] = set()
+    for item_id in item_ids:
+        item = item_by_id.get(_text(item_id)) or {}
+        for source in item.get("sources", []) or []:
+            name = _text(source.get("source") or source.get("source_name") or source.get("source_id"))
+            key = _text(
+                source.get("publisher_key")
+                or source.get("source_id")
+                or source.get("source")
+                or source.get("url")
+            )
+            if name and key not in seen_keys:
+                seen_keys.add(key)
+                names.append(name)
+        name = _text(item.get("source"))
+        fallback_key = _text(item.get("source_id") or name)
+        if not item.get("sources") and name and fallback_key not in seen_keys:
+            seen_keys.add(fallback_key)
+            names.append(name)
+    return names
+
+
+def _history_detail_url(base_url: str, date: str, slot: str) -> str:
+    base = _text(base_url)
+    if not base:
+        return ""
+    try:
+        parts = urlsplit(base)
+    except ValueError:
+        return ""
+    if parts.scheme.lower() not in {"http", "https"} or not parts.netloc:
+        return ""
+    query = dict(parse_qsl(parts.query, keep_blank_values=True))
+    query.update({"date": date, "slot": slot})
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), ""))
+
+
+def _editorial_category_lines(
+    package: Dict[str, Any],
+    selected_ids: set[str],
+    total_budget: int,
+    max_per_category: int,
+    *,
+    markdown: bool,
+) -> List[str]:
+    grouped: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    list_threshold = int((package.get("thresholds") or {}).get("list", 30))
+    for item in sorted(
+        package.get("raw_items", []) or [],
+        key=lambda value: int(value.get("raw_item_score") or 0),
+        reverse=True,
+    ):
+        item_id = _text(item.get("id"))
+        if item_id in selected_ids or int(item.get("raw_item_score") or 0) < list_threshold:
+            continue
+        grouped[_text(item.get("category")) or DEFAULT_CATEGORY].append(item)
+    ordered = sorted(
+        grouped.items(),
+        key=lambda pair: int(pair[1][0].get("raw_item_score") or 0),
+        reverse=True,
+    )
+    lines: List[str] = []
+    remaining = max(0, total_budget)
+    for category, items in ordered:
+        chosen = items[: min(max_per_category, remaining)]
+        if not chosen:
+            continue
+        category_label = f"**{category}**" if markdown else category
+        lines.extend(["", category_label])
+        lines.extend(
+            f"• {normalize_display_title(item.get('title', ''))}"
+            for item in chosen
+        )
+        remaining -= len(chosen)
+        if remaining <= 0:
+            break
+    return lines
+
+
+def _format_digest_date(value: str) -> str:
+    try:
+        parsed = datetime.strptime(value, "%Y-%m-%d")
+        return f"{parsed.month}月{parsed.day}日"
+    except (TypeError, ValueError):
+        return value
+
+
+def _event_adds_title_information(event: Any, title: Any) -> bool:
+    event_text = _text(event)
+    title_text = normalize_display_title(title)
+    if not event_text:
+        return False
+    event_key = normalize_title(event_text)
+    title_key = normalize_title(title_text)
+    if not event_key or not title_key:
+        return False
+    if event_key in title_key or title_key in event_key:
+        return False
+    return _title_similarity(event_text, title_text) < 0.72
+
+
+def _split_editorial_blocks(text: str, max_bytes: int) -> List[str]:
+    """Split at editorial block boundaries; never slice a title or paragraph."""
+    source_blocks = [block.strip() for block in re.split(r"\n\s*\n", text) if block.strip()]
+    blocks: List[str] = []
+    for block in source_blocks:
+        if len(block.encode("utf-8")) <= max_bytes:
+            blocks.append(block)
+            continue
+        first_line = block.splitlines()[0].strip()
+        if re.match(r"(?:\*\*)?\d+\.\s", first_line):
+            raise TitleIntegrityError(
+                "one complete top item exceeds the WeCom hard limit; refusing to truncate its title"
+            )
+        for line in (value.strip() for value in block.splitlines() if value.strip()):
+            if len(line.encode("utf-8")) > max_bytes:
+                raise TitleIntegrityError(
+                    "one complete title exceeds the WeCom hard limit; refusing to truncate it"
+                )
+            blocks.append(line)
+    messages: List[str] = []
+    current = ""
+    for block in blocks:
+        candidate = f"{current}\n\n{block}" if current else block
+        if current and len(candidate.encode("utf-8")) > max_bytes:
+            messages.append(current)
+            current = block
+        else:
+            current = candidate
+    if current:
+        messages.append(current)
+    if any(len(message.encode("utf-8")) > max_bytes for message in messages):
+        raise AssertionError("editorial boundary splitter exceeded hard byte limit")
+    return messages
+
+
+def render_wechat_intelligence_messages(
+    package: Dict[str, Any],
+    digest_summary: Optional[Any] = None,
+    config: Optional[Dict[str, Any]] = None,
+    max_bytes: int = 4000,
+    output_format: str = "markdown",
+) -> List[str]:
+    """Render a title-safe mobile brief; 4000 bytes remains a hard transport limit."""
+    if config is None and isinstance(digest_summary, dict) and (
+        "wechat" in digest_summary or "slots" in digest_summary or "rules" in digest_summary
+    ) and "top_items" not in digest_summary:
+        config = digest_summary
+        digest_summary = None
+    cfg = config or {}
+    wechat = cfg.get("wechat") or {}
+    layout = _text(cfg.get("layout") or wechat.get("layout") or "editorial_v2")
+    if layout != "editorial_v2":
+        return _render_legacy_wechat_intelligence_messages(package, cfg, max_bytes=max_bytes)
+
+    markdown = _text(output_format).lower() != "text"
+
+    def heading(text: str, level: int) -> str:
+        return f"{'#' * level} {text}" if markdown else text
+
+    def emphasized(text: str) -> str:
+        return f"**{text}**" if markdown else text
+
+    if isinstance(digest_summary, DigestSummary):
+        summary = digest_summary
+    else:
+        summary = build_digest_summary(package, digest_summary, cfg)
+    summary_payload = summary.to_dict()
+    package["digest_summary"] = summary_payload
+
+    slot = _text(package.get("slot")).upper()
+    slot_spec = (cfg.get("slots") or {}).get(slot, {}) or {}
+    slot_label = _text(slot_spec.get("label")) or {"A": "早间", "B": "午间", "C": "晚间"}.get(slot, slot)
+    raw_items = package.get("raw_items", []) or []
+    item_by_id = {_text(item.get("id")): item for item in raw_items}
+    top_items = [
+        item for item in summary_payload.get("top_items", []) or []
+        if _text(item.get("id")) in item_by_id
+    ]
+    selected_ids = {
+        _text(evidence_id)
+        for item in top_items
+        for evidence_id in (item.get("evidence_ids") or [item.get("id")])
+        if _text(evidence_id)
+    }
+    detail_url = ""
+    if bool(wechat.get("detail_link_enabled", False)):
+        detail_url = _history_detail_url(
+            wechat.get("detail_url", "https://neutriverse.uk/ravenis/"),
+            _text(package.get("date")),
+            slot,
+        )
+    max_category_items = max(0, min(int(wechat.get("category_item_budget", 6)), 6))
+    per_category = max(1, min(int(wechat.get("max_items_per_category", 2)), 2))
+    max_watch_items = max(0, min(int(wechat.get("max_watch_items", 2)), 2))
+    target_bytes = min(max_bytes, max(1200, int(wechat.get("target_bytes", 3200))))
+
+    def compose(
+        category_budget: int,
+        watch_budget: int,
+        *,
+        include_overview: bool = True,
+        include_rule_evidence: bool = True,
+    ) -> str:
+        lines = [
+            heading(f"Ravenis {slot_label}简报 · {_format_digest_date(_text(package.get('date')))}", 1),
+            (
+                f"> {len(raw_items)} 条入库 · {len(top_items)} 项重点"
+                if markdown
+                else f"{len(raw_items)} 条入库 · {len(top_items)} 项重点"
+            ),
+        ]
+        overview = _text(summary_payload.get("overview"))
+        if include_overview and overview:
+            lines.extend(["", overview])
+        if top_items:
+            lines.extend(["", heading(f"先看这 {len(top_items)} 件事", 2)])
+            for index, item in enumerate(top_items, 1):
+                evidence_ids = item.get("evidence_ids") or [item.get("id")]
+                source_record = item_by_id[_text(item.get("id"))]
+                display_title = normalize_display_title(source_record.get("title"))
+                sources = _digest_item_sources(evidence_ids, package)
+                source_text = "、".join(sources[:3]) or "来源待核验"
+                source_suffix = (
+                    f" · {len(sources)} 个独立发布者"
+                    if len(sources) > 1
+                    else " · 单一发布者"
+                )
+                lines.extend(["", emphasized(f"{index}. {display_title}")])
+                event = _text(item.get("event"))
+                if summary.status == "ai" and _event_adds_title_information(event, display_title):
+                    lines.append(f"发生：{_clip(event, 56)}")
+                impact = _text(item.get("impact"))
+                if summary.status == "ai" and impact:
+                    lines.append(f"影响：{_clip(impact, 56)}")
+                elif include_rule_evidence and impact:
+                    lines.append(f"依据：{_clip(impact, 56)}")
+                watch = _text(item.get("watch"))
+                if watch:
+                    lines.append(f"观察：{_clip(watch, 40)}")
+                lines.append(f"来源：{_clip(source_text, 30)}{source_suffix}")
+        else:
+            lines.extend(["", "本时段无新增强信号。"])
+
+        category_lines = _editorial_category_lines(
+            package,
+            selected_ids,
+            category_budget,
+            per_category,
+            markdown=markdown,
+        )
+        if category_lines:
+            lines.extend(["", heading("更多标题", 2), *category_lines])
+
+        top_watch = {_text(item.get("watch")) for item in top_items}
+        watchlist = [
+            item for item in summary_payload.get("watchlist", []) or []
+            if _text(item.get("text")) and _text(item.get("text")) not in top_watch
+        ][:watch_budget]
+        if watchlist:
+            lines.extend(["", heading("继续观察", 2), ""])
+            lines.extend(f"• {_clip(item.get('text', ''), 40)}" for item in watchlist)
+
+        if detail_url:
+            lines.append("")
+            if markdown:
+                lines.append(f"[查看完整日报（{len(raw_items)} 条）]({detail_url}) →")
+            else:
+                lines.append(f"查看完整日报（{len(raw_items)} 条）：{detail_url}")
+        if summary.status != "ai":
+            lines.extend(["", "`规则摘要`" if markdown else "规则摘要"])
+        return "\n".join(lines).strip()
+
+    category_budget = max_category_items
+    watch_budget = max_watch_items
+    message = compose(category_budget, watch_budget)
+    while len(message.encode("utf-8")) > target_bytes and watch_budget > 0:
+        watch_budget -= 1
+        message = compose(category_budget, watch_budget)
+    while len(message.encode("utf-8")) > target_bytes and category_budget > 3:
+        category_budget -= 1
+        message = compose(category_budget, watch_budget)
+    include_rule_evidence = True
+    if len(message.encode("utf-8")) > target_bytes and summary.status != "ai":
+        include_rule_evidence = False
+        message = compose(
+            category_budget,
+            watch_budget,
+            include_rule_evidence=include_rule_evidence,
+        )
+    if len(message.encode("utf-8")) > target_bytes:
+        message = compose(
+            category_budget,
+            watch_budget,
+            include_overview=False,
+            include_rule_evidence=include_rule_evidence,
+        )
+    if len(message.encode("utf-8")) <= max_bytes:
+        return [message]
+    return _split_editorial_blocks(message, max_bytes)
+
+
 def _briefing_lines(items: List[Dict[str, Any]], clusters: List[Dict[str, Any]], brief_threshold: int) -> List[str]:
     categories = {item.get("category") for item in items if item.get("raw_item_score", 0) >= brief_threshold}
     lines: List[str] = []
@@ -755,6 +1381,47 @@ def _public_summary(value: Any) -> str:
     return re.sub(r"\s+", " ", _text(value))[:280]
 
 
+def _public_digest_summary(value: Any, allowed_ids: set[str]) -> Dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    top_items = []
+    for raw_item in value.get("top_items", []) or []:
+        if not isinstance(raw_item, dict):
+            continue
+        item_id = _text(raw_item.get("id"))
+        evidence_ids = [
+            _text(item) for item in raw_item.get("evidence_ids", []) or []
+            if _text(item) in allowed_ids
+        ][:6]
+        if item_id not in allowed_ids or item_id not in evidence_ids:
+            continue
+        top_items.append({
+            "id": item_id,
+            "headline": _clip(raw_item.get("headline", ""), 24),
+            "event": _clip(raw_item.get("event", ""), 56),
+            "impact": _clip(raw_item.get("impact", ""), 56),
+            "watch": _clip(raw_item.get("watch", ""), 40),
+            "evidence_ids": evidence_ids,
+        })
+    watchlist = []
+    for raw_item in value.get("watchlist", []) or []:
+        if not isinstance(raw_item, dict):
+            continue
+        evidence_ids = [
+            _text(item) for item in raw_item.get("evidence_ids", []) or []
+            if _text(item) in allowed_ids
+        ][:6]
+        text = _clip(raw_item.get("text", ""), 40)
+        if text and evidence_ids:
+            watchlist.append({"text": text, "evidence_ids": evidence_ids})
+    return {
+        "status": "ai" if value.get("status") == "ai" else "rules",
+        "overview": _clip(value.get("overview", ""), 80),
+        "top_items": top_items[:3],
+        "watchlist": watchlist[:3],
+    }
+
+
 def build_public_projection(package: Dict[str, Any]) -> Dict[str, Any]:
     """Build the strict public DTO. Private/raw fields never cross this boundary."""
     records = []
@@ -766,6 +1433,7 @@ def build_public_projection(package: Dict[str, Any]) -> Dict[str, Any]:
             "type": "news",
             "title": item.get("title", ""),
             "source": item.get("source", ""),
+            "source_count": max(1, int(item.get("source_count") or 1)),
             "url": _public_url(item.get("url", "")),
             "category": item.get("category", DEFAULT_CATEGORY),
             "tags": list(item.get("tags", []) or [])[:10],
@@ -783,6 +1451,7 @@ def build_public_projection(package: Dict[str, Any]) -> Dict[str, Any]:
             "type": "event_cluster",
             "title": cluster.get("title", ""),
             "source": f"{int(cluster.get('source_count') or 0)} 个独立来源",
+            "source_count": max(1, int(cluster.get("source_count") or 1)),
             "url": "",
             "category": cluster.get("category", DEFAULT_CATEGORY),
             "tags": list(cluster.get("tags", []) or [])[:10],
@@ -792,10 +1461,18 @@ def build_public_projection(package: Dict[str, Any]) -> Dict[str, Any]:
             "occurrence_count": len(cluster.get("related_item_ids", []) or []),
             "summary": _public_summary(cluster.get("summary", "")),
         })
+    allowed_ids = {record["id"] for record in records if record.get("id")}
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "date": package.get("date", ""),
         "generated_at": package.get("generated_at", ""),
+        "run": {
+            "slot": _text(package.get("slot")),
+            "source": "ravenis",
+            "generated_at": _text(package.get("generated_at")),
+            "record_ids": sorted(allowed_ids),
+            "summary": _public_digest_summary(package.get("digest_summary"), allowed_ids),
+        },
         "records": records,
     }
 
@@ -824,9 +1501,18 @@ def archive_external_run_to_r2(
     run_payload = dict(private_run)
     run_payload.update({"run_id": run_id, "date": date, "slot": slot, "source": source})
     projection = {
-        "schema_version": 1,
+        "schema_version": 2,
         "date": date,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "run": {
+            "slot": slot,
+            "source": source,
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+            "record_ids": [
+                _text(record.get("id")) for record in public_records if _text(record.get("id"))
+            ],
+            "summary": {},
+        },
         "records": public_records,
     }
     try:

@@ -25,6 +25,7 @@ from trendradar.core.analyzer import convert_keyword_stats_to_platform_stats
 from trendradar.core.cdn import fetch_with_fallback
 from trendradar.core.scheduler import ResolvedSchedule
 from trendradar.crawler import DataFetcher
+from trendradar.intelligence import build_intelligence_package
 from trendradar.storage import convert_crawl_results_to_news_data
 from trendradar.utils.time import DEFAULT_TIMEZONE, calculate_days_old, is_within_days
 
@@ -533,15 +534,40 @@ class NewsAnalyzer:
             else:
                 ai_report_type = report_type
 
-            result = analyzer.analyze(
-                stats=ai_stats,
-                rss_stats=rss_items,
-                report_mode=ai_mode,
-                report_type=ai_report_type,
-                platforms=platforms,
-                keywords=keywords,
-                standalone_data=standalone_data,
+            intelligence_config = self.ctx.config.get("INTELLIGENCE_PUSH", {})
+            editorial_layout = (
+                intelligence_config.get("layout")
+                or (intelligence_config.get("wechat") or {}).get("layout")
             )
+            if intelligence_config.get("enabled", False) and editorial_layout == "editorial_v2":
+                analysis_report = self.ctx.prepare_report(
+                    ai_stats,
+                    id_to_name=ai_id_to_name,
+                    mode=ai_mode,
+                    frequency_file=self.frequency_file,
+                )
+                analysis_package = build_intelligence_package(
+                    report_data=analysis_report,
+                    rss_items=rss_items,
+                    standalone_data=standalone_data,
+                    now=self.ctx.get_time(),
+                    config=intelligence_config,
+                )
+                result = analyzer.analyze_intelligence_package(
+                    analysis_package,
+                    intelligence_config.get("summary") or {},
+                    report_type=ai_report_type,
+                )
+            else:
+                result = analyzer.analyze(
+                    stats=ai_stats,
+                    rss_stats=rss_items,
+                    report_mode=ai_mode,
+                    report_type=ai_report_type,
+                    platforms=platforms,
+                    keywords=keywords,
+                    standalone_data=standalone_data,
+                )
 
             # 设置 AI 分析使用的模式
             if result.success:

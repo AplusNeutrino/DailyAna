@@ -4,14 +4,20 @@
 from __future__ import annotations
 
 import argparse
+import gzip
+import hashlib
+import io
 import json
 import os
 import re
 import shutil
+import tarfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
+
+from trendradar.weekly import build_weekly_digest
 
 try:
     import boto3
@@ -23,7 +29,7 @@ except ImportError:  # pragma: no cover
 
 PROJECTION_RE = re.compile(r"^public-history/(\d{4}-\d{2}-\d{2})/([^/]+)\.json$")
 PUBLIC_FIELDS = {
-    "id", "short_id", "date", "type", "title", "source", "url", "category",
+    "id", "short_id", "date", "type", "title", "source", "source_count", "url", "category",
     "tags", "score", "first_seen", "last_seen", "occurrence_count", "summary",
 }
 FORBIDDEN_FIELDS = {
@@ -31,6 +37,11 @@ FORBIDDEN_FIELDS = {
     "playbook", "significance", "observation", "source_urls", "private_config",
 }
 ALLOWED_TYPES = {"news", "event_cluster", "ai_digest", "hotlist", "rss"}
+RUN_FIELDS = {"slot", "source", "generated_at", "record_ids", "summary"}
+SUMMARY_FIELDS = {"status", "overview", "top_items", "watchlist"}
+TOP_ITEM_FIELDS = {"id", "headline", "event", "impact", "watch", "evidence_ids"}
+WATCH_ITEM_FIELDS = {"text", "evidence_ids"}
+RELEASE_STATIC_FILES = ("manifest.json", "search-index.json", "weekly/latest.json")
 
 
 def utc_now() -> datetime:
@@ -103,7 +114,7 @@ def validate_record(record: Any, key: str) -> dict[str, Any]:
     forbidden = set(record) & FORBIDDEN_FIELDS
     if extra or forbidden:
         raise ValueError(f"public record contains forbidden/unknown fields in {key}: {sorted(extra | forbidden)}")
-    clean = {field: record.get(field) for field in PUBLIC_FIELDS}
+    clean = {field: record.get(field) for field in sorted(PUBLIC_FIELDS)}
     clean["id"] = str(clean.get("id") or "").strip()
     clean["title"] = str(clean.get("title") or "").strip()
     clean["date"] = str(clean.get("date") or "").strip()
@@ -116,10 +127,95 @@ def validate_record(record: Any, key: str) -> dict[str, Any]:
     clean["summary"] = re.sub(r"\s+", " ", str(clean.get("summary") or "")).strip()[:280]
     clean["tags"] = [str(tag)[:80] for tag in (clean.get("tags") or []) if str(tag).strip()][:10]
     clean["score"] = max(0, min(100, int(clean.get("score") or 0)))
+    clean["source_count"] = max(1, int(clean.get("source_count") or 1))
     clean["occurrence_count"] = max(1, int(clean.get("occurrence_count") or 1))
     for field in ("short_id", "source", "category", "first_seen", "last_seen"):
         clean[field] = str(clean.get(field) or "").strip()
     return clean
+
+
+def _compact_text(value: Any, limit: int) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip()[:limit]
+
+
+def _projection_identity(key: str) -> tuple[str, str]:
+    stem = Path(key).stem
+    if "-" not in stem:
+        return stem, ""
+    source, slot = stem.rsplit("-", 1)
+    return source, slot.upper()
+
+
+def validate_run(
+    run: Any,
+    key: str,
+    date: str,
+    record_ids: set[str],
+) -> dict[str, Any]:
+    source_from_key, slot_from_key = _projection_identity(key)
+    if run is None:
+        run = {}
+    if not isinstance(run, dict) or set(run) - RUN_FIELDS:
+        raise ValueError(f"public run metadata has an invalid shape in {key}")
+    slot = _compact_text(run.get("slot") or slot_from_key, 24).upper()
+    source = _compact_text(run.get("source") or source_from_key, 40)
+    generated_at = _compact_text(run.get("generated_at"), 40)
+    run_record_ids = [
+        _compact_text(value, 80)
+        for value in run.get("record_ids", []) or []
+        if _compact_text(value, 80) in record_ids
+    ]
+    if not run_record_ids:
+        run_record_ids = sorted(record_ids)
+    raw_summary = run.get("summary") or {}
+    if not isinstance(raw_summary, dict) or set(raw_summary) - SUMMARY_FIELDS:
+        raise ValueError(f"public digest summary has an invalid shape in {key}")
+    status = "ai" if raw_summary.get("status") == "ai" else "rules"
+    top_items = []
+    for raw_item in raw_summary.get("top_items", []) or []:
+        if not isinstance(raw_item, dict) or set(raw_item) - TOP_ITEM_FIELDS:
+            raise ValueError(f"public digest top item has an invalid shape in {key}")
+        item_id = _compact_text(raw_item.get("id"), 80)
+        evidence_ids = [
+            _compact_text(value, 80)
+            for value in raw_item.get("evidence_ids", []) or []
+            if _compact_text(value, 80) in record_ids
+        ][:6]
+        if item_id not in record_ids or item_id not in evidence_ids:
+            raise ValueError(f"public digest top item references unknown evidence in {key}")
+        top_items.append({
+            "id": item_id,
+            "headline": _compact_text(raw_item.get("headline"), 24),
+            "event": _compact_text(raw_item.get("event"), 56),
+            "impact": _compact_text(raw_item.get("impact"), 56),
+            "watch": _compact_text(raw_item.get("watch"), 40),
+            "evidence_ids": evidence_ids,
+        })
+    watchlist = []
+    for raw_item in raw_summary.get("watchlist", []) or []:
+        if not isinstance(raw_item, dict) or set(raw_item) - WATCH_ITEM_FIELDS:
+            raise ValueError(f"public digest watch item has an invalid shape in {key}")
+        evidence_ids = [
+            _compact_text(value, 80)
+            for value in raw_item.get("evidence_ids", []) or []
+            if _compact_text(value, 80) in record_ids
+        ][:6]
+        text = _compact_text(raw_item.get("text"), 40)
+        if text and evidence_ids:
+            watchlist.append({"text": text, "evidence_ids": evidence_ids})
+    return {
+        "date": date,
+        "slot": slot,
+        "source": source,
+        "generated_at": generated_at,
+        "record_ids": list(dict.fromkeys(run_record_ids)),
+        "summary": {
+            "status": status,
+            "overview": _compact_text(raw_summary.get("overview"), 80),
+            "top_items": top_items[:3],
+            "watchlist": watchlist[:3],
+        },
+    }
 
 
 def _earliest(left: str, right: str) -> str:
@@ -160,10 +256,118 @@ def merge_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     )
 
 
-def write_site(output_dir: Path, records: list[dict[str, Any]], retention_days: int) -> Path:
+def build_search_index(records: list[dict[str, Any]], runs: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build the lazy-loaded 30-day browser index from public fields only."""
+    slots_by_id: dict[str, set[str]] = {}
+    for run in runs:
+        slot = _compact_text(run.get("slot"), 24).upper()
+        if not slot:
+            continue
+        for record_id in run.get("record_ids", []) or []:
+            slots_by_id.setdefault(str(record_id), set()).add(slot)
+    items = []
+    for record in records:
+        item = {field: record.get(field) for field in sorted(PUBLIC_FIELDS)}
+        item["slots"] = sorted(slots_by_id.get(record["id"], set()))
+        items.append(item)
+    return {
+        "schema_version": 1,
+        "generated_at": utc_now().isoformat(timespec="seconds"),
+        "total": len(items),
+        "items": items,
+    }
+
+
+def release_file_names(output_dir: Path) -> list[str]:
+    names = [*RELEASE_STATIC_FILES]
+    names.extend(
+        f"days/{path.name}" for path in sorted((output_dir / "days").glob("*.json"))
+    )
+    missing = [name for name in RELEASE_STATIC_FILES if not (output_dir / name).is_file()]
+    if missing:
+        raise ValueError(f"history release lacks required files: {', '.join(missing)}")
+    return names
+
+
+def create_release_archive(output_dir: Path) -> tuple[bytes, str, list[str]]:
+    """Create a deterministic, rootless tar.gz containing public data only."""
+    names = release_file_names(output_dir)
+    compressed = io.BytesIO()
+    with gzip.GzipFile(fileobj=compressed, mode="wb", mtime=0) as gzip_file:
+        with tarfile.open(fileobj=gzip_file, mode="w") as archive:
+            for name in names:
+                data = (output_dir / name).read_bytes()
+                info = tarfile.TarInfo(name=name)
+                info.size = len(data)
+                info.mtime = 0
+                info.mode = 0o644
+                info.uid = info.gid = 0
+                info.uname = info.gname = ""
+                archive.addfile(info, io.BytesIO(data))
+    payload = compressed.getvalue()
+    return payload, hashlib.sha256(payload).hexdigest(), names
+
+
+def publish_release(
+    client,
+    bucket: str,
+    output_dir: Path,
+    release_prefix: str,
+    pointer_key: str,
+    retention_days: int,
+) -> dict[str, Any]:
+    payload, digest, names = create_release_archive(output_dir)
+    generated_at = utc_now().isoformat(timespec="seconds")
+    timestamp = utc_now().strftime("%Y%m%dT%H%M%SZ")
+    run_id = f"{timestamp}-{digest[:12]}"
+    object_key = f"{release_prefix.strip('/')}/{run_id}.tar.gz"
+    client.put_object(
+        Bucket=bucket,
+        Key=object_key,
+        Body=payload,
+        ContentLength=len(payload),
+        ContentType="application/gzip",
+        CacheControl="public, max-age=31536000, immutable",
+        Metadata={"sha256": digest},
+    )
+    pointer = {
+        "schema_version": 1,
+        "run_id": run_id,
+        "generated_at": generated_at,
+        "object_key": object_key,
+        "sha256": digest,
+        "size": len(payload),
+        "retention_days": retention_days,
+        "files": names,
+    }
+    pointer_body = json.dumps(pointer, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    # The mutable pointer is deliberately written last. Consumers either see the
+    # previous complete release or this complete release, never an in-between set.
+    client.put_object(
+        Bucket=bucket,
+        Key=pointer_key,
+        Body=pointer_body,
+        ContentLength=len(pointer_body),
+        ContentType="application/json; charset=utf-8",
+        CacheControl="no-store",
+    )
+    print(f"[history] release={object_key} sha256={digest} pointer={pointer_key}")
+    return pointer
+
+
+def write_site(
+    output_dir: Path,
+    records: list[dict[str, Any]],
+    retention_days: int,
+    runs: list[dict[str, Any]] | None = None,
+    weekly_records: list[dict[str, Any]] | None = None,
+) -> Path:
     grouped: dict[str, list[dict[str, Any]]] = {}
     for record in records:
         grouped.setdefault(record["date"], []).append(record)
+    runs_by_date: dict[str, list[dict[str, Any]]] = {}
+    for run in runs or []:
+        runs_by_date.setdefault(run["date"], []).append(run)
     generated_at = utc_now().isoformat(timespec="seconds")
     staging = output_dir.parent / f".{output_dir.name}-staging"
     if staging.exists():
@@ -175,18 +379,54 @@ def write_site(output_dir: Path, records: list[dict[str, Any]], retention_days: 
         day_entries = []
         for date in sorted(grouped, reverse=True):
             items = grouped[date]
-            payload = {"date": date, "total": len(items), "items": items}
+            day_runs = sorted(
+                runs_by_date.get(date, []),
+                key=lambda run: (run.get("slot", ""), run.get("generated_at", "")),
+            )
+            payload = {"date": date, "total": len(items), "runs": day_runs, "items": items}
             (days_dir / f"{date}.json").write_text(
                 json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8"
             )
             day_entries.append({"date": date, "count": len(items), "path": f"days/{date}.json"})
+        weekly_payload = build_weekly_digest(
+            weekly_records or records,
+            end_date=max(grouped),
+            window_days=7,
+            max_themes=12,
+        )
+        weekly_dir = staging / "weekly"
+        weekly_dir.mkdir(parents=True)
+        weekly_path = weekly_dir / "latest.json"
+        weekly_path.write_text(
+            json.dumps(weekly_payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8"
+        )
+        search_payload = build_search_index(records, runs or [])
+        search_path = staging / "search-index.json"
+        search_path.write_text(
+            json.dumps(search_payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8"
+        )
+        search_sha256 = hashlib.sha256(search_path.read_bytes()).hexdigest()
         manifest = {
-            "schema_version": 1,
+            "schema_version": 2,
             "generated_at": generated_at,
             "retention_days": retention_days,
             "total": len(records),
+            "run_count": sum(len(value) for value in runs_by_date.values()),
             "days": day_entries,
             "types": sorted({record["type"] for record in records}),
+            "slots": sorted({run.get("slot", "") for run in runs or [] if run.get("slot")}),
+            "weekly": {
+                "path": "weekly/latest.json",
+                "start_date": weekly_payload["start_date"],
+                "end_date": weekly_payload["end_date"],
+                "record_count": weekly_payload["record_count"],
+                "theme_count": weekly_payload["theme_count"],
+            },
+            "search": {
+                "path": "search-index.json",
+                "count": len(records),
+                "sha256": search_sha256,
+            },
         }
         manifest_path = staging / "manifest.json"
         manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
@@ -202,6 +442,10 @@ def write_site(output_dir: Path, records: list[dict[str, Any]], retention_days: 
                 stale.unlink()
         for source in days_dir.glob("*.json"):
             os.replace(source, target_days / source.name)
+        target_weekly = output_dir / "weekly"
+        target_weekly.mkdir(parents=True, exist_ok=True)
+        os.replace(weekly_path, target_weekly / weekly_path.name)
+        os.replace(search_path, output_dir / "search-index.json")
         os.replace(manifest_path, output_dir / "manifest.json")
     finally:
         if staging.exists():
@@ -211,9 +455,21 @@ def write_site(output_dir: Path, records: list[dict[str, Any]], retention_days: 
 
 def upload_site(client, bucket: str, output_dir: Path, manifest_key: str) -> None:
     base = manifest_key.rsplit("/", 1)[0] if "/" in manifest_key else "history"
-    files = [*sorted((output_dir / "days").glob("*.json")), output_dir / "manifest.json"]
+    files = [
+        *sorted((output_dir / "days").glob("*.json")),
+        *sorted((output_dir / "weekly").glob("*.json")),
+        output_dir / "search-index.json",
+        output_dir / "manifest.json",
+    ]
     for path in files:
-        key = manifest_key if path.name == "manifest.json" else f"{base}/days/{path.name}"
+        if path.name == "manifest.json":
+            key = manifest_key
+        elif path.name == "search-index.json":
+            key = f"{base}/search-index.json"
+        elif path.parent.name == "weekly":
+            key = f"{base}/weekly/{path.name}"
+        else:
+            key = f"{base}/days/{path.name}"
         body = path.read_bytes()
         client.put_object(
             Bucket=bucket,
@@ -223,29 +479,49 @@ def upload_site(client, bucket: str, output_dir: Path, manifest_key: str) -> Non
             ContentType="application/json; charset=utf-8",
             CacheControl="public, max-age=300",
         )
-    print(f"[history] uploaded manifest and {len(files) - 1} daily shards")
+    print(f"[history] uploaded manifest, search index, {len(files) - 3} daily shards, and one weekly digest")
 
 
-def build_index(retention_days: int, output_dir: Path, upload_key: str = "", projection_limit: int = 120) -> int:
+def build_index(
+    retention_days: int,
+    output_dir: Path,
+    upload_key: str = "",
+    projection_limit: int = 120,
+    release_prefix: str = "",
+    pointer_key: str = "",
+) -> int:
     client, bucket = s3_client_from_env()
     cutoff = (utc_now() - timedelta(days=retention_days - 1)).date().isoformat()
     keys = list_projection_keys(client, bucket, cutoff, limit=projection_limit)
     if not keys:
         raise RuntimeError("R2 has no public history projections; refusing to replace the current Pages site")
     records = []
+    runs = []
     for key, projection_date in keys:
         projection = read_projection(client, bucket, key)
+        projection_records = []
         for raw_record in projection["records"]:
             record = validate_record(raw_record, key)
             if record["date"] != projection_date:
                 raise ValueError(f"record date differs from projection path: {key}")
             records.append(record)
+            projection_records.append(record)
+        runs.append(validate_run(
+            projection.get("run"),
+            key,
+            projection_date,
+            {record["id"] for record in projection_records},
+        ))
     merged = merge_records(records)
     if not merged:
         raise RuntimeError("all public projections were empty; refusing to publish an empty site")
-    manifest_path = write_site(output_dir, merged, retention_days)
+    manifest_path = write_site(output_dir, merged, retention_days, runs=runs, weekly_records=records)
     if upload_key:
         upload_site(client, bucket, output_dir, upload_key)
+    if release_prefix or pointer_key:
+        if not release_prefix or not pointer_key:
+            raise ValueError("release prefix and pointer key must be configured together")
+        publish_release(client, bucket, output_dir, release_prefix, pointer_key, retention_days)
     print(
         f"[history] projections={len(keys)} input_records={len(records)} "
         f"published_records={len(merged)} manifest={manifest_path}"
@@ -259,6 +535,8 @@ def main() -> int:
     parser.add_argument("--output-dir", default="docs/history")
     parser.add_argument("--upload-key", default=os.environ.get("HISTORY_INDEX_KEY", "history/manifest.json"))
     parser.add_argument("--projection-limit", type=int, default=120)
+    parser.add_argument("--release-prefix", default=os.environ.get("HISTORY_RELEASE_PREFIX", "history/releases"))
+    parser.add_argument("--pointer-key", default=os.environ.get("HISTORY_CURRENT_KEY", "history/current.json"))
     parser.add_argument("--prune-remote", action="store_true", help="Deprecated no-op; cleanup requires a separate audited migration")
     args = parser.parse_args()
     if args.prune_remote:
@@ -269,6 +547,8 @@ def main() -> int:
             output_dir=Path(args.output_dir),
             upload_key=args.upload_key,
             projection_limit=max(args.projection_limit, 1),
+            release_prefix=args.release_prefix,
+            pointer_key=args.pointer_key,
         )
         return 0
     except Exception as exc:

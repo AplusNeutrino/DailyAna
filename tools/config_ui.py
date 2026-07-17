@@ -24,7 +24,6 @@ from urllib.parse import unquote, urlparse
 
 import yaml
 
-
 ROOT = Path(__file__).resolve().parents[1]
 if ROOT.name != "DailyAna-push-worktree":
     raise RuntimeError(
@@ -483,7 +482,7 @@ def state_payload() -> dict:
             "ready": local_manifest.exists(),
             "page_url": os.environ.get(
                 "RAVENIS_HISTORY_URL",
-                "https://aplusneutrino.github.io/DailyAna/history/",
+                "https://neutriverse.uk/ravenis/",
             ),
             "message": (
                 f"本地公开投影已生成：{local_manifest}"

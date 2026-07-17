@@ -7,21 +7,20 @@ TrendRadar MCP Server - FastMCP 2.0 实现
 
 import asyncio
 import json
-from typing import List, Optional, Dict, Union
+from typing import Dict, List, Optional, Union
 
 from fastmcp import FastMCP
 
-from .tools.data_query import DataQueryTools
 from .tools.analytics import AnalyticsTools
-from .tools.search_tools import SearchTools
-from .tools.config_mgmt import ConfigManagementTools
-from .tools.system import SystemManagementTools
-from .tools.storage_sync import StorageSyncTools
 from .tools.article_reader import ArticleReaderTools
+from .tools.config_mgmt import ConfigManagementTools
+from .tools.data_query import DataQueryTools
 from .tools.notification import NotificationTools
+from .tools.search_tools import SearchTools
+from .tools.storage_sync import StorageSyncTools
+from .tools.system import SystemManagementTools
 from .utils.date_parser import DateParser
 from .utils.errors import MCPError
-
 
 # 创建 FastMCP 2.0 应用
 mcp = FastMCP('trendradar-news')
@@ -1143,7 +1142,7 @@ def run_server(
         print("  协议: MCP over stdio (标准输入输出)")
         print("  说明: 通过标准输入输出与 MCP 客户端通信")
     elif transport == 'http':
-        print(f"  协议: MCP over HTTP (生产环境)")
+        print("  协议: MCP over HTTP (生产环境)")
         print(f"  服务器监听: {host}:{port}")
 
     if project_root:

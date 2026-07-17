@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from ..services.data_service import DataService
+from ..utils.errors import CrawlTaskError, MCPError
 from ..utils.validators import validate_platforms
-from ..utils.errors import MCPError, CrawlTaskError
 
 
 class SystemManagementTools:
@@ -212,9 +212,10 @@ class SystemManagementTools:
         """
         try:
             from trendradar.crawler.fetcher import DataFetcher
-            from trendradar.storage.local import LocalStorageBackend
             from trendradar.storage.base import convert_crawl_results_to_news_data
-            from trendradar.utils.time import get_configured_time, format_date_folder, format_time_filename
+            from trendradar.storage.local import LocalStorageBackend
+            from trendradar.utils.time import format_date_folder, format_time_filename, get_configured_time
+
             from ..services.cache_service import get_cache
 
             platforms = validate_platforms(platforms)
@@ -327,7 +328,7 @@ class SystemManagementTools:
         # 遍历每个平台
         for platform_id, titles_data in results.items():
             platform_name = id_to_name.get(platform_id, platform_id)
-            html += f'        <div class="platform">\n'
+            html += '        <div class="platform">\n'
             html += f'            <div class="platform-name">{platform_name}</div>\n'
 
             # 排序标题
@@ -343,7 +344,7 @@ class SystemManagementTools:
 
             # 显示新闻
             for rank, title, url, mobile_url in sorted_items:
-                html += f'            <div class="news-item">\n'
+                html += '            <div class="news-item">\n'
                 html += f'                <span class="rank">{rank}.</span>\n'
                 html += f'                <span class="title">{self._html_escape(title)}</span>\n'
                 if url:
@@ -407,7 +408,6 @@ class SystemManagementTools:
             >>> print(result['data']['any_update'])
         """
         import yaml
-        import requests
 
         def parse_version(version_str: str):
             """将版本号字符串解析为元组"""
@@ -473,8 +473,8 @@ class SystemManagementTools:
 
         try:
             # 导入本地版本
-            from trendradar import __version__ as trendradar_version
             from mcp_server import __version__ as mcp_version
+            from trendradar import __version__ as trendradar_version
 
             # 从配置文件获取远程版本 URL
             config_path = self.project_root / "config" / "config.yaml"

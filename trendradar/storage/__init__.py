@@ -9,16 +9,16 @@
 """
 
 from trendradar.storage.base import (
-    StorageBackend,
-    NewsItem,
     NewsData,
-    RSSItem,
+    NewsItem,
     RSSData,
+    RSSItem,
+    StorageBackend,
     convert_crawl_results_to_news_data,
 )
-from trendradar.storage.sqlite_mixin import SQLiteStorageMixin
 from trendradar.storage.local import LocalStorageBackend
 from trendradar.storage.manager import StorageManager, get_storage_manager
+from trendradar.storage.sqlite_mixin import SQLiteStorageMixin
 
 # 远程后端可选导入（需要 boto3）
 try:

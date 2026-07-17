@@ -84,6 +84,7 @@ jobs:
           RAVENIS_PRIVATE_CONFIG: ${{ github.workspace }}/.ravenis-secrets/config/config.yaml
           RAVENIS_PRIVATE_CONFIG_DIR: ${{ github.workspace }}/.ravenis-secrets/config
           WEWORK_WEBHOOK_URL: ${{ secrets.WEWORK_WEBHOOK_URL }}
+          WEWORK_MSG_TYPE: ${{ secrets.WEWORK_MSG_TYPE }}
           S3_BUCKET_NAME: ${{ secrets.S3_BUCKET_NAME }}
           S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
           S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}

@@ -21,11 +21,18 @@ EXPECTED_CRONS = {
 }
 REQUIRED_PRODUCTION_ENV = (
     "WEWORK_WEBHOOK_URL",
+    "WEWORK_MSG_TYPE",
     "S3_BUCKET_NAME",
     "S3_ACCESS_KEY_ID",
     "S3_SECRET_ACCESS_KEY",
     "S3_ENDPOINT_URL",
 )
+REQUIRED_WORKFLOW_SECRETS = {
+    "history-publish.yml": {
+        "S3_BUCKET_NAME", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY",
+        "S3_ENDPOINT_URL", "NEUTRIVERSE_DISPATCH_TOKEN",
+    },
+}
 
 
 class UniqueKeyLoader(yaml.SafeLoader):
@@ -154,6 +161,18 @@ def validate(args: argparse.Namespace) -> tuple[list[str], list[str]]:
         total = sum(float(value) for value in weights.values())
         if abs(total - 1.0) > 1e-9:
             errors.append(f"scoring.weights must sum to 1.0 (got {total})")
+        publisher_aliases = rules.get("publisher_aliases") or {}
+        alias_owners: dict[str, str] = {}
+        for canonical, aliases in publisher_aliases.items():
+            for alias in [canonical, *(aliases or [])]:
+                token = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", str(alias).lower())
+                owner = alias_owners.get(token)
+                if token and owner and owner != canonical:
+                    errors.append(
+                        f"publisher alias {alias!r} is shared by {owner!r} and {canonical!r}"
+                    )
+                elif token:
+                    alias_owners[token] = str(canonical)
     except Exception as exc:
         errors.append(f"intelligence rules: {exc}")
 
@@ -165,6 +184,22 @@ def validate(args: argparse.Namespace) -> tuple[list[str], list[str]]:
         if f'"{cron}") slot={slot}; profile={profile}' not in crawler_text:
             errors.append(f"crawler workflow lacks explicit mapping for {cron} -> {slot}/{profile}")
 
+    for workflow_name, secret_names in REQUIRED_WORKFLOW_SECRETS.items():
+        workflow_path = ROOT / ".github" / "workflows" / workflow_name
+        try:
+            workflow_text = workflow_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            errors.append(f"workflow {workflow_name}: {exc}")
+            continue
+        missing_secrets = sorted(
+            name for name in secret_names if f"secrets.{name}" not in workflow_text
+        )
+        if missing_secrets:
+            errors.append(
+                f"workflow {workflow_name} lacks required Secret references: "
+                + ", ".join(missing_secrets)
+            )
+
     if config.get("source_digest"):
         warnings.append("source_digest is deprecated and ignored; remove it after one release")
 
@@ -172,6 +207,15 @@ def validate(args: argparse.Namespace) -> tuple[list[str], list[str]]:
         missing = [name for name in REQUIRED_PRODUCTION_ENV if not os.environ.get(name, "").strip()]
         if missing:
             errors.append("missing required production environment values: " + ", ".join(missing))
+        configured_msg_type = (
+            os.environ.get("WEWORK_MSG_TYPE")
+            or (((config.get("notification") or {}).get("channels") or {}).get("wework") or {}).get("msg_type")
+            or "markdown"
+        ).strip().lower()
+        if configured_msg_type != "markdown":
+            errors.append(
+                "production WEWORK_MSG_TYPE must be markdown for Ravenis editorial links and hierarchy"
+            )
 
     return errors, warnings
 

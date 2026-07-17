@@ -106,18 +106,30 @@ scoring:
     list: 30
 intelligence_push:
   enabled: true
+  layout: editorial_v2
   migration:
     dual_write_legacy_until: '2026-07-22'
+  summary:
+    prompt_file: intelligence_digest_prompt.txt
+    max_candidates: 12
+    temperature: 0.2
+    max_tokens: 900
   wechat:
+    layout: editorial_v2
     enable_plain_text_mode: true
     show_urls: false
     show_runtime_info: false
     show_source_badge: true
     split_mode: logical
-    max_items_per_category: 12
+    target_bytes: 3200
+    max_top_items: 3
+    category_item_budget: 6
+    max_items_per_category: 2
+    max_watch_items: 2
+    detail_link_enabled: false
+    detail_url: https://neutriverse.uk/ravenis/
     max_clusters_in_altar: 5
     max_clusters_in_trial: 5
-    max_observations: 6
   storage:
     archive:
       enabled: true
@@ -210,7 +222,7 @@ ai_analysis:
   language: Chinese
   prompt_file: ai_analysis_prompt_ravenis.txt
   mode: follow_report
-  max_news_for_analysis: 150
+  max_news_for_analysis: 12
   include_rss: false
   include_standalone: true
   include_rank_timeline: true

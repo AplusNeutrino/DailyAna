@@ -4,11 +4,11 @@
 实现配置查询和管理功能。
 """
 
-from typing import Dict, Optional, Any, TypedDict
+from typing import Any, Dict, Optional, TypedDict
 
 from ..services.data_service import DataService
-from ..utils.validators import validate_config_section
 from ..utils.errors import MCPError
+from ..utils.validators import validate_config_section
 
 
 class ErrorInfo(TypedDict, total=False):

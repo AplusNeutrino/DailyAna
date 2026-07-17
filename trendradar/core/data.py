@@ -9,7 +9,7 @@
 Author: Ravenis Core Team
 """
 
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Optional, Tuple
 
 
 def read_all_today_titles_from_storage(

@@ -7,11 +7,46 @@ AI 分析器模块
 """
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
 from trendradar.ai.client import AIClient
 from trendradar.ai.prompt_loader import load_prompt_template
+
+
+def _parse_digest_json_response(response: Any) -> Dict[str, Any]:
+    """Parse one model response with fence extraction and one local repair pass."""
+    text = str(response or "").lstrip("\ufeff").strip()
+    if not text:
+        raise ValueError("AI 返回空响应")
+    fenced = re.search(r"```(?:json)?\s*(.*?)```", text, flags=re.IGNORECASE | re.DOTALL)
+    if fenced:
+        text = fenced.group(1).strip()
+    else:
+        object_start = text.find("{")
+        if object_start >= 0:
+            text = text[object_start:]
+
+    parse_error: Optional[Exception] = None
+    try:
+        value, _ = json.JSONDecoder().raw_decode(text)
+        if isinstance(value, dict):
+            return value
+        raise ValueError("AI 摘要必须是 JSON 对象")
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        parse_error = exc
+
+    try:
+        from json_repair import repair_json
+
+        repaired = repair_json(text, return_objects=True)
+        if isinstance(repaired, dict):
+            print("[AI] 摘要 JSON 本地修复成功（json_repair）")
+            return repaired
+    except Exception:
+        pass
+    raise ValueError(f"AI 摘要 JSON 校验失败: {parse_error}")
 
 
 @dataclass
@@ -24,6 +59,7 @@ class AIAnalysisResult:
     rss_insights: str = ""               # RSS 深度洞察
     outlook_strategy: str = ""           # 研判与策略建议
     standalone_summaries: Dict[str, str] = field(default_factory=dict)  # 独立展示区概括 {源ID: 概括}
+    digest_summary: Dict[str, Any] = field(default_factory=dict)  # Ravenis 可校验编辑式摘要
 
     # 基础元数据
     raw_response: str = ""               # 原始响应
@@ -126,7 +162,7 @@ class AIAnalyzer:
         print(f"[AI] Key : {masked_key}")
 
         if api_base:
-            print(f"[AI] 接口: 存在自定义 API 端点")
+            print("[AI] 接口: 存在自定义 API 端点")
 
         timeout = self.ai_config.get("TIMEOUT", 120)
         max_tokens = self.ai_config.get("MAX_TOKENS", 5000)
@@ -199,7 +235,7 @@ class AIAnalyzer:
 
             # JSON 解析失败时的重试兜底（仅重试一次）
             if result.error and "JSON 解析错误" in result.error:
-                print(f"[AI] JSON 解析失败，尝试让 AI 修复...")
+                print("[AI] JSON 解析失败，尝试让 AI 修复...")
                 retry_result = self._retry_fix_json(response, result.error)
                 if retry_result and retry_result.success and not retry_result.error:
                     print("[AI] JSON 修复成功")
@@ -241,6 +277,97 @@ class AIAnalyzer:
                 success=False,
                 error=friendly_msg
             )
+
+    def analyze_intelligence_package(
+        self,
+        package: Dict[str, Any],
+        summary_config: Optional[Dict[str, Any]] = None,
+        report_type: str = "智能新闻简报",
+    ) -> AIAnalysisResult:
+        """Analyze only the bounded Ravenis evidence set in one non-repairing model call."""
+        from trendradar.intelligence import select_digest_candidates
+
+        cfg = summary_config or {}
+        max_candidates = max(1, min(int(cfg.get("max_candidates", 12)), 12))
+        candidates = select_digest_candidates(package, max_candidates)
+        result = AIAnalysisResult(
+            total_news=len(package.get("raw_items", []) or []),
+            analyzed_news=len(candidates),
+            max_news_limit=max_candidates,
+            hotlist_count=sum(1 for item in package.get("raw_items", []) or [] if item.get("source_type") == "hotlist"),
+            rss_count=sum(1 for item in package.get("raw_items", []) or [] if item.get("source_type") == "rss"),
+            ai_mode="intelligence_digest",
+        )
+        if not candidates:
+            result.skipped = True
+            result.error = "本轮无可分析候选"
+            return result
+        if not self.client.api_key:
+            result.error = "未配置 AI API Key"
+            return result
+
+        prompt_file = cfg.get("prompt_file", "intelligence_digest_prompt.txt")
+        system_prompt, user_template = load_prompt_template(prompt_file, label="AI digest")
+        candidate_payload = [
+            {
+                "id": item.get("id", ""),
+                "title": item.get("title", ""),
+                "source": item.get("source", ""),
+                "category": item.get("category", ""),
+                "tags": item.get("tags", []),
+                "score": item.get("raw_item_score", 0),
+                "source_count": item.get("source_count", 1),
+                "occurrence_count": item.get("occurrence_count", 1),
+                "first_seen": item.get("first_seen", ""),
+                "last_seen": item.get("last_seen", ""),
+                "score_components": item.get("score_components", {}),
+            }
+            for item in candidates
+        ]
+        candidate_json = json.dumps(candidate_payload, ensure_ascii=False, separators=(",", ":"))
+        user_prompt = (user_template or "{candidate_json}")
+        user_prompt = user_prompt.replace("{report_type}", report_type)
+        user_prompt = user_prompt.replace("{date}", str(package.get("date", "")))
+        user_prompt = user_prompt.replace("{slot}", str(package.get("slot", "")))
+        user_prompt = user_prompt.replace("{candidate_json}", candidate_json)
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": user_prompt})
+        try:
+            response = self.client.chat(
+                messages,
+                temperature=float(cfg.get("temperature", 0.2)),
+                max_tokens=int(cfg.get("max_tokens", 900)),
+                num_retries=1,
+            )
+            parsed = AIAnalysisResult(raw_response=response)
+            try:
+                data = _parse_digest_json_response(response)
+            except (TypeError, ValueError) as exc:
+                parsed.error = str(exc)
+                return parsed
+            digest = data.get("digest_summary")
+            if digest is None and {"overview", "top_items"}.issubset(data):
+                digest = data
+            if not isinstance(digest, dict):
+                parsed.error = "AI 未返回 digest_summary"
+                return parsed
+            parsed.digest_summary = digest
+            parsed.success = True
+            parsed.total_news = result.total_news
+            parsed.analyzed_news = result.analyzed_news
+            parsed.max_news_limit = result.max_news_limit
+            parsed.hotlist_count = result.hotlist_count
+            parsed.rss_count = result.rss_count
+            parsed.hotlist_analyzed = sum(1 for item in candidates if item.get("source_type") == "hotlist")
+            parsed.rss_analyzed = sum(1 for item in candidates if item.get("source_type") == "rss")
+            parsed.ai_mode = "intelligence_digest"
+            parsed.core_trends = str(parsed.digest_summary.get("overview") or "")
+            return parsed
+        except Exception as exc:
+            result.error = f"AI 摘要失败 ({type(exc).__name__}): {str(exc)[:200]}"
+            return result
 
     def _prepare_news_content(
         self,
@@ -618,6 +745,11 @@ class AIAnalyzer:
             result.signals = data.get("signals", "")
             result.rss_insights = data.get("rss_insights", "")
             result.outlook_strategy = data.get("outlook_strategy", "")
+            digest = data.get("digest_summary")
+            if digest is None and {"overview", "top_items"}.issubset(data):
+                digest = data
+            if isinstance(digest, dict):
+                result.digest_summary = digest
 
             # 解析独立展示区概括
             summaries = data.get("standalone_summaries", {})

@@ -7,8 +7,8 @@ CDN 回退模块
 同一会话中记住可用源的索引，后续请求从该源开始尝试。
 """
 
-import re
 import logging
+import re
 from typing import Optional
 
 import requests

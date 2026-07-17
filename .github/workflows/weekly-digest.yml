@@ -1,0 +1,88 @@
+name: Ravenis Core - Weekly Digest
+
+on:
+  schedule:
+    - cron: "30 12 * * 0" # Sunday 20:30 Beijing
+  workflow_dispatch:
+
+concurrency:
+  group: ravenis-producer-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  weekly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          clean: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Install dependencies
+        run: uv sync --frozen --no-dev
+
+      - name: Checkout private runtime config
+        uses: actions/checkout@v6
+        with:
+          repository: AplusNeutrino/Ravenis-Secrets
+          token: ${{ secrets.RAVENIS_SECRETS_TOKEN }}
+          path: .ravenis-secrets
+
+      - name: Build the seven-day evidence window
+        env:
+          S3_BUCKET_NAME: ${{ secrets.S3_BUCKET_NAME }}
+          S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+          S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+          S3_ENDPOINT_URL: ${{ secrets.S3_ENDPOINT_URL }}
+          S3_REGION: ${{ secrets.S3_REGION }}
+        run: uv run python tools/build_history_index.py --retention-days 7 --output-dir .weekly-history --upload-key ""
+
+      - name: Synthesize and send the weekly digest
+        env:
+          RAVENIS_PRIVATE_CONFIG: ${{ github.workspace }}/.ravenis-secrets/config/config.yaml
+          RAVENIS_PRIVATE_CONFIG_DIR: ${{ github.workspace }}/.ravenis-secrets/config
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          AI_MODEL: ${{ secrets.AI_MODEL }}
+          AI_API_BASE: ${{ secrets.AI_API_BASE }}
+          WEWORK_WEBHOOK_URL: ${{ secrets.WEWORK_WEBHOOK_URL }}
+          WEWORK_MSG_TYPE: ${{ secrets.WEWORK_MSG_TYPE }}
+        run: >-
+          uv run python tools/build_weekly_digest.py
+          --history-dir .weekly-history
+          --output .weekly-history/weekly/latest.json
+          --markdown-output .weekly-history/weekly/latest.md
+          --ai
+          --send
+
+      - name: Write run summary
+        if: always()
+        shell: bash
+        run: |
+          if [[ -f .weekly-history/weekly/latest.json ]]; then
+            python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+
+          data = json.loads(Path(".weekly-history/weekly/latest.json").read_text(encoding="utf-8"))
+          summary = data.get("editorial_summary") or {}
+          print(f"weekly window={data.get('start_date')}..{data.get('end_date')}")
+          print(f"records={data.get('record_count', 0)} themes={data.get('theme_count', 0)}")
+          print(f"summary_status={summary.get('status', 'rules')}")
+          PY
+          else
+            echo "weekly output was not produced" >> "$GITHUB_STEP_SUMMARY"
+          fi

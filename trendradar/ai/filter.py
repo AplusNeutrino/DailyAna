@@ -144,19 +144,19 @@ class AIFilter:
         messages.append({"role": "user", "content": user_prompt})
 
         if self.debug:
-            print(f"\n[AI筛选][DEBUG] === 标签提取 Prompt ===")
+            print("\n[AI筛选][DEBUG] === 标签提取 Prompt ===")
             for m in messages:
                 print(f"[{m['role']}]\n{m['content']}")
-            print(f"[AI筛选][DEBUG] === Prompt 结束 ===")
+            print("[AI筛选][DEBUG] === Prompt 结束 ===")
 
         try:
             response = self.client.chat(messages)
 
             if self.debug:
-                print(f"\n[AI筛选][DEBUG] === 标签提取 AI 原始响应 ===")
+                print("\n[AI筛选][DEBUG] === 标签提取 AI 原始响应 ===")
                 # 尝试格式化 JSON 便于阅读
                 self._print_formatted_json(response)
-                print(f"[AI筛选][DEBUG] === 响应结束 ===")
+                print("[AI筛选][DEBUG] === 响应结束 ===")
 
             tags = self._parse_tags_response(response)
             print(f"[AI筛选] 提取到 {len(tags)} 个标签")
@@ -166,7 +166,7 @@ class AIFilter:
             if self.debug:
                 json_str = self._extract_json(response)
                 if not json_str:
-                    print(f"[AI筛选][DEBUG] 无法从响应中提取 JSON")
+                    print("[AI筛选][DEBUG] 无法从响应中提取 JSON")
                 else:
                     raw_data = json.loads(json_str)
                     raw_tags = raw_data.get("tags", [])
@@ -221,18 +221,18 @@ class AIFilter:
         messages.append({"role": "user", "content": user_prompt})
 
         if self.debug:
-            print(f"\n[AI筛选][DEBUG] === 标签更新 Prompt ===")
+            print("\n[AI筛选][DEBUG] === 标签更新 Prompt ===")
             for m in messages:
                 print(f"[{m['role']}]\n{m['content']}")
-            print(f"[AI筛选][DEBUG] === Prompt 结束 ===")
+            print("[AI筛选][DEBUG] === Prompt 结束 ===")
 
         try:
             response = self.client.chat(messages)
 
             if self.debug:
-                print(f"\n[AI筛选][DEBUG] === 标签更新 AI 原始响应 ===")
+                print("\n[AI筛选][DEBUG] === 标签更新 AI 原始响应 ===")
                 self._print_formatted_json(response)
-                print(f"[AI筛选][DEBUG] === 响应结束 ===")
+                print("[AI筛选][DEBUG] === 响应结束 ===")
 
             result = self._parse_update_tags_response(response)
             if result is None:
@@ -497,7 +497,7 @@ class AIFilter:
 
         if self.debug:
             ai_returned = len(data)
-            print(f"[AI筛选][DEBUG] --- 分类解析结果 ---")
+            print("[AI筛选][DEBUG] --- 分类解析结果 ---")
             print(f"[AI筛选][DEBUG] AI 返回 {ai_returned} 条, 有效 {len(results)} 条 (每条新闻仅保留最高分 tag)")
             if skipped_empty > 0:
                 print(f"[AI筛选][DEBUG] 跳过空 tags: {skipped_empty} 条")
