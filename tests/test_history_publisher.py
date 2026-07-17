@@ -31,6 +31,18 @@ def test_history_publisher_direct_entrypoint_imports_project_package():
         text=True,
     )
     assert result.returncode == 0, result.stderr
+    lightweight = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; import tools.build_history_index; "
+            "assert 'litellm' not in sys.modules",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert lightweight.returncode == 0, lightweight.stderr
 
 
 def public_record(**override):
