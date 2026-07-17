@@ -310,6 +310,12 @@ def test_plain_text_fallback_converts_markdown_links(intelligence_config, monkey
 
 def test_invalid_or_generic_ai_digest_falls_back(intelligence_config, monkeypatch):
     package, config = build_editorial_package(intelligence_config, monkeypatch)
+    normalizable = valid_ai_digest(package)
+    normalizable["top_items"][0]["evidence_ids"] = []
+    normalized = build_digest_summary(package, normalizable, config)
+    assert normalized.status == "ai"
+    assert normalized.top_items[0].id in normalized.top_items[0].evidence_ids
+
     bad = valid_ai_digest(package)
     bad["top_items"][0]["id"] = "r_unknown"
     bad["top_items"][0]["evidence_ids"] = ["r_unknown"]

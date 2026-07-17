@@ -837,8 +837,15 @@ def validate_digest_summary(
         item_id = _text(raw_item.get("id"))
         if item_id not in allowed_ids or item_id in seen_ids:
             raise ValueError(f"digest references unknown or duplicate id: {item_id}")
-        evidence = tuple(dict.fromkeys(_text(value) for value in (raw_item.get("evidence_ids") or []) if _text(value)))
-        if not evidence or item_id not in evidence or any(value not in allowed_ids for value in evidence):
+        raw_evidence = raw_item.get("evidence_ids") or []
+        if isinstance(raw_evidence, str):
+            raw_evidence = [raw_evidence]
+        evidence = tuple(
+            dict.fromkeys(
+                [item_id, *(_text(value) for value in raw_evidence if _text(value))]
+            )
+        )
+        if any(value not in allowed_ids for value in evidence):
             raise ValueError(f"digest evidence ids are invalid for {item_id}")
         impact = _validated_digest_text(raw_item.get("impact"), 56, "impact")
         source_count = len(_digest_item_sources(evidence, package)) or 1
@@ -860,7 +867,12 @@ def validate_digest_summary(
     for raw_item in raw_watch[:max_watch]:
         if not isinstance(raw_item, dict) or set(raw_item) - {"text", "evidence_ids"}:
             raise ValueError("digest watch item has an invalid shape")
-        evidence = tuple(dict.fromkeys(_text(value) for value in (raw_item.get("evidence_ids") or []) if _text(value)))
+        raw_evidence = raw_item.get("evidence_ids") or []
+        if isinstance(raw_evidence, str):
+            raw_evidence = [raw_evidence]
+        evidence = tuple(
+            dict.fromkeys(_text(value) for value in raw_evidence if _text(value))
+        )
         if not evidence or any(value not in allowed_ids for value in evidence):
             raise ValueError("digest watch item references unknown evidence")
         watchlist.append(DigestWatchItem(
