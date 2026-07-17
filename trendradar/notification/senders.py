@@ -32,6 +32,7 @@ from urllib.parse import urlparse
 import requests
 
 from trendradar.intelligence import (
+    TitleIntegrityError,
     archive_intelligence_to_r2,
     build_digest_summary,
     build_intelligence_package,
@@ -612,10 +613,14 @@ def send_to_wework(
                 digest_summary,
                 intelligence_config,
                 max_bytes=batch_size,
+                output_format=msg_type,
             )
             archive_ok = archive_intelligence_to_r2(package, batches, intelligence_config)
             logical_batches = bool(batches)
             print(f"{log_prefix}使用 intelligence_push 逻辑分条 [{report_type}]")
+        except TitleIntegrityError as exc:
+            print(f"{log_prefix} intelligence_push 拒绝截断标题：{exc}")
+            return False
         except Exception as exc:
             archive_ok = False
             print(f"{log_prefix} intelligence_push 失败，回退原推送：{exc}")

@@ -9,6 +9,9 @@ __pycache__/
 .devtools/
 .venv/
 .test-tmp/
+.pytest_cache/
+pytest-cache-files-*/
 tests/_runtime_history/
 tests/_runtime_history_many/
+tests/_runtime_history_release/
 tests/_runtime_config/

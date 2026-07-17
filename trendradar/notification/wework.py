@@ -28,7 +28,14 @@ def split_utf8_text(text: str, max_bytes: int = 4000) -> list[str]:
 
 
 def _plain_text(value: str) -> str:
-    return re.sub(r"[*#>`]", "", value)
+    text = re.sub(
+        r"\[([^\]]+)\]\((https?://[^)\s]+)\)",
+        r"\1：\2",
+        str(value or ""),
+    )
+    text = re.sub(r"(?m)^\s*#{1,6}\s*", "", text)
+    text = re.sub(r"(?m)^\s*>\s?", "", text)
+    return re.sub(r"[*`]", "", text)
 
 
 def send_wework_messages(

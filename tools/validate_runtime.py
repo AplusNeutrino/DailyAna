@@ -160,6 +160,18 @@ def validate(args: argparse.Namespace) -> tuple[list[str], list[str]]:
         total = sum(float(value) for value in weights.values())
         if abs(total - 1.0) > 1e-9:
             errors.append(f"scoring.weights must sum to 1.0 (got {total})")
+        publisher_aliases = rules.get("publisher_aliases") or {}
+        alias_owners: dict[str, str] = {}
+        for canonical, aliases in publisher_aliases.items():
+            for alias in [canonical, *(aliases or [])]:
+                token = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", str(alias).lower())
+                owner = alias_owners.get(token)
+                if token and owner and owner != canonical:
+                    errors.append(
+                        f"publisher alias {alias!r} is shared by {owner!r} and {canonical!r}"
+                    )
+                elif token:
+                    alias_owners[token] = str(canonical)
     except Exception as exc:
         errors.append(f"intelligence rules: {exc}")
 
@@ -194,6 +206,15 @@ def validate(args: argparse.Namespace) -> tuple[list[str], list[str]]:
         missing = [name for name in REQUIRED_PRODUCTION_ENV if not os.environ.get(name, "").strip()]
         if missing:
             errors.append("missing required production environment values: " + ", ".join(missing))
+        configured_msg_type = (
+            os.environ.get("WEWORK_MSG_TYPE")
+            or (((config.get("notification") or {}).get("channels") or {}).get("wework") or {}).get("msg_type")
+            or "markdown"
+        ).strip().lower()
+        if configured_msg_type != "markdown":
+            errors.append(
+                "production WEWORK_MSG_TYPE must be markdown for Ravenis editorial links and hierarchy"
+            )
 
     return errors, warnings
 

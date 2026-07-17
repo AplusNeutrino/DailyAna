@@ -7,11 +7,46 @@ AI 分析器模块
 """
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
 from trendradar.ai.client import AIClient
 from trendradar.ai.prompt_loader import load_prompt_template
+
+
+def _parse_digest_json_response(response: Any) -> Dict[str, Any]:
+    """Parse one model response with fence extraction and one local repair pass."""
+    text = str(response or "").lstrip("\ufeff").strip()
+    if not text:
+        raise ValueError("AI 返回空响应")
+    fenced = re.search(r"```(?:json)?\s*(.*?)```", text, flags=re.IGNORECASE | re.DOTALL)
+    if fenced:
+        text = fenced.group(1).strip()
+    else:
+        object_start = text.find("{")
+        if object_start >= 0:
+            text = text[object_start:]
+
+    parse_error: Optional[Exception] = None
+    try:
+        value, _ = json.JSONDecoder().raw_decode(text)
+        if isinstance(value, dict):
+            return value
+        raise ValueError("AI 摘要必须是 JSON 对象")
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        parse_error = exc
+
+    try:
+        from json_repair import repair_json
+
+        repaired = repair_json(text, return_objects=True)
+        if isinstance(repaired, dict):
+            print("[AI] 摘要 JSON 本地修复成功（json_repair）")
+            return repaired
+    except Exception:
+        pass
+    raise ValueError(f"AI 摘要 JSON 校验失败: {parse_error}")
 
 
 @dataclass
@@ -308,12 +343,9 @@ class AIAnalyzer:
             )
             parsed = AIAnalysisResult(raw_response=response)
             try:
-                data = json.loads((response or "").strip())
-            except (json.JSONDecodeError, TypeError) as exc:
-                parsed.error = f"AI 摘要 JSON 校验失败: {exc}"
-                return parsed
-            if not isinstance(data, dict):
-                parsed.error = "AI 摘要必须是 JSON 对象"
+                data = _parse_digest_json_response(response)
+            except (TypeError, ValueError) as exc:
+                parsed.error = str(exc)
                 return parsed
             digest = data.get("digest_summary")
             if digest is None and {"overview", "top_items"}.issubset(data):

@@ -125,7 +125,8 @@ intelligence_push:
     max_top_items: 3
     category_item_budget: 6
     max_items_per_category: 2
-    max_watch_items: 3
+    max_watch_items: 2
+    detail_link_enabled: false
     detail_url: https://neutriverse.uk/ravenis/
     max_clusters_in_altar: 5
     max_clusters_in_trial: 5
