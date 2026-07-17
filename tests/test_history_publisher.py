@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import subprocess
+import sys
 import tarfile
 import time
 from datetime import datetime, timezone
@@ -19,6 +21,16 @@ from tools.build_history_index import (
     validate_run,
     write_site,
 )
+
+
+def test_history_publisher_direct_entrypoint_imports_project_package():
+    result = subprocess.run(
+        [sys.executable, "tools/build_history_index.py", "--help"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def public_record(**override):
