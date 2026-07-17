@@ -945,6 +945,7 @@ def archive_ai_digest_projection(
             "type": "ai_digest",
             "title": topic.title,
             "source": FEED_NAME,
+            "source_count": 1,
             "url": normalize_url(topic.primary_url or topic.page_url),
             "category": "AI / 模型",
             "tags": list(analysis_row.get("tags") or [])[:10],

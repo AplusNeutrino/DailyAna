@@ -7,8 +7,8 @@
 
 import os
 import re
-from pathlib import Path
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Dict, List, Optional
 
 import yaml
@@ -339,7 +339,6 @@ class StorageSyncTools:
         """
         try:
             storage_config = self._get_storage_config()
-            config = self._load_config()
 
             # 本地存储状态
             local_config = storage_config.get("local", {})

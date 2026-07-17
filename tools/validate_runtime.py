@@ -26,6 +26,12 @@ REQUIRED_PRODUCTION_ENV = (
     "S3_SECRET_ACCESS_KEY",
     "S3_ENDPOINT_URL",
 )
+REQUIRED_WORKFLOW_SECRETS = {
+    "history-publish.yml": {
+        "S3_BUCKET_NAME", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY",
+        "S3_ENDPOINT_URL", "NEUTRIVERSE_DISPATCH_TOKEN",
+    },
+}
 
 
 class UniqueKeyLoader(yaml.SafeLoader):
@@ -164,6 +170,22 @@ def validate(args: argparse.Namespace) -> tuple[list[str], list[str]]:
     for cron, (slot, profile) in EXPECTED_CRONS.items():
         if f'"{cron}") slot={slot}; profile={profile}' not in crawler_text:
             errors.append(f"crawler workflow lacks explicit mapping for {cron} -> {slot}/{profile}")
+
+    for workflow_name, secret_names in REQUIRED_WORKFLOW_SECRETS.items():
+        workflow_path = ROOT / ".github" / "workflows" / workflow_name
+        try:
+            workflow_text = workflow_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            errors.append(f"workflow {workflow_name}: {exc}")
+            continue
+        missing_secrets = sorted(
+            name for name in secret_names if f"secrets.{name}" not in workflow_text
+        )
+        if missing_secrets:
+            errors.append(
+                f"workflow {workflow_name} lacks required Secret references: "
+                + ", ".join(missing_secrets)
+            )
 
     if config.get("source_digest"):
         warnings.append("source_digest is deprecated and ignored; remove it after one release")

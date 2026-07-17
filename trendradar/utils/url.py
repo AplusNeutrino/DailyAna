@@ -6,9 +6,8 @@ URL 处理工具模块
 - normalize_url: 标准化 URL，去除动态参数
 """
 
-from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
 from typing import Dict, Set
-
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 # 各平台需要移除的特定参数
 #   - weibo: 有 band_rank（排名）和 Refer（来源）动态参数

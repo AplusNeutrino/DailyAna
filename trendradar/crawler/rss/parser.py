@@ -5,13 +5,13 @@ RSS 解析器
 支持 RSS 2.0、Atom 和 JSON Feed 1.1 格式的解析
 """
 
-import re
 import html
 import json
+import re
 from dataclasses import dataclass
 from datetime import datetime
-from typing import List, Optional, Dict, Any
 from email.utils import parsedate_to_datetime
+from typing import Any, Dict, List, Optional
 
 try:
     import feedparser

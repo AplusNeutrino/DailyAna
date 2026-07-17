@@ -7,13 +7,13 @@ v2.0.0: 仅支持 SQLite 数据库，移除 TXT 文件支持
 
 import re
 import sqlite3
-from pathlib import Path
-from typing import Dict, List, Tuple, Optional
 from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 import yaml
 
-from ..utils.errors import FileParseError, DataNotFoundError
+from ..utils.errors import DataNotFoundError, FileParseError
 from .cache_service import get_cache
 
 
@@ -400,6 +400,7 @@ class ParserService:
             FileParseError: 文件解析错误
         """
         import os
+
         from trendradar.core.frequency import load_frequency_words
 
         if words_file is None:

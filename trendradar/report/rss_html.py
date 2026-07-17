@@ -6,7 +6,7 @@ RSS HTML 报告渲染模块
 """
 
 from datetime import datetime
-from typing import Dict, List, Optional, Callable
+from typing import Callable, Dict, List, Optional
 
 from trendradar.report.helpers import html_escape
 

@@ -1,107 +1,19 @@
 <!doctype html>
 <html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Ravenis Core 历史搜索</title>
-  <style>
-    :root { color-scheme:light; --bg:#f4f6fa; --panel:#fff; --line:#d8dee9; --text:#182132; --muted:#667085; --accent:#155eef; }
-    * { box-sizing:border-box; }
-    body { margin:0; color:var(--text); background:var(--bg); font:14px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif; }
-    header { padding:18px max(20px,calc((100% - 1160px)/2)); background:var(--panel); border-bottom:1px solid var(--line); }
-    h1 { margin:0 0 3px; font-size:20px; }
-    main { max-width:1160px; margin:auto; padding:18px; }
-    .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:14px; }
-    .filters { display:grid; grid-template-columns:minmax(220px,2fr) repeat(4,minmax(120px,1fr)); gap:10px; }
-    label { display:block; margin-bottom:4px; font-size:12px; color:var(--muted); }
-    input,select,button { width:100%; padding:9px 10px; border:1px solid var(--line); border-radius:7px; background:#fff; font:inherit; color:inherit; }
-    button { width:auto; cursor:pointer; }
-    .status,.meta,.pager { display:flex; flex-wrap:wrap; gap:8px; align-items:center; color:var(--muted); }
-    .pill { display:inline-flex; padding:2px 8px; border-radius:999px; background:#edf2f7; font-size:12px; }
-    .pill.ai_digest { color:#6941c6; background:#f4ebff; }
-    .pill.event_cluster { color:#067647; background:#ecfdf3; }
-    .item { padding:14px 0; border-bottom:1px solid var(--line); }
-    .item:last-child { border:0; }
-    .title { color:var(--text); font-size:15px; font-weight:700; text-decoration:none; }
-    a.title:hover { color:var(--accent); }
-    details { margin-top:7px; color:#344054; }
-    summary { cursor:pointer; color:var(--accent); }
-    .pager { justify-content:space-between; margin-top:12px; }
-    .pager div { display:flex; gap:8px; align-items:center; }
-    .muted { color:var(--muted); }
-    @media(max-width:800px) { .filters { grid-template-columns:1fr 1fr; } .filters>div:first-child { grid-column:1/-1; } main { padding:12px; } }
-  </style>
-</head>
-<body>
-  <header>
-    <h1>Ravenis Core 历史搜索</h1>
-    <div class="muted">公开数据仅含元数据与不超过 280 字的短摘要，不含正文、prompt、原始 AI 响应或私有配置。</div>
-  </header>
-  <main>
-    <section class="panel filters">
-      <div><label for="q">关键词</label><input id="q" placeholder="标题、来源、分类、标签或摘要" autofocus></div>
-      <div><label for="type">类型</label><select id="type"><option value="">全部</option><option value="news">新闻</option><option value="ai_digest">AI Digest</option><option value="event_cluster">事件簇</option><option value="hotlist">热榜</option><option value="rss">RSS</option></select></div>
-      <div><label for="from">开始日期</label><input id="from" type="date"></div>
-      <div><label for="to">结束日期</label><input id="to" type="date"></div>
-      <div><label for="sort">排序</label><select id="sort"><option value="latest">最近出现</option><option value="first">首次出现</option><option value="score">分数</option></select></div>
-    </section>
-    <section class="panel status"><span id="status">正在加载 manifest…</span><span id="generated" class="pill"></span><span id="total" class="pill"></span></section>
-    <section class="panel"><div id="results"></div><div class="pager"><div id="pageInfo"></div><div><button id="prev" type="button">上一页</button><button id="next" type="button">下一页</button></div></div></section>
-  </main>
-  <script>
-    const PAGE_SIZE=50;
-    let manifest={days:[]},items=[],filtered=[],page=1;
-    const $=id=>document.getElementById(id);
-    const esc=value=>String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
-    const safeUrl=value=>{try{const u=new URL(String(value||''),location.href);return ['http:','https:'].includes(u.protocol)?u.href:''}catch{return ''}};
-    const typeLabel=type=>({news:'新闻',ai_digest:'AI Digest',event_cluster:'事件簇',hotlist:'热榜',rss:'RSS'}[type]||type||'新闻');
-
-    async function loadHistory(){
-      try{
-        const response=await fetch('./manifest.json',{cache:'no-store'});
-        if(!response.ok)throw new Error(`manifest HTTP ${response.status}`);
-        manifest=await response.json();
-        $('generated').textContent=manifest.generated_at?`生成 ${manifest.generated_at}`:'';
-        $('total').textContent=`共 ${manifest.total||0} 条`;
-        $('status').textContent=`正在加载 ${manifest.days?.length||0} 个每日分片…`;
-        const shards=await Promise.all((manifest.days||[]).map(async day=>{
-          const result=await fetch(day.path,{cache:'no-store'});
-          if(!result.ok)throw new Error(`${day.path} HTTP ${result.status}`);
-          return result.json();
-        }));
-        items=shards.flatMap(shard=>shard.items||[]);
-        $('status').textContent='历史分片已加载';
-        applyFilters();
-      }catch(error){
-        $('status').textContent=`加载失败：${error.message}`;
-        $('results').innerHTML='<p class="muted">发布器会在 R2 缺失或校验失败时保留上一版页面；请检查 History Publish Actions。</p>';
-      }
-    }
-
-    function searchText(item){return [item.id,item.short_id,item.title,item.source,item.category,item.summary,...(item.tags||[])].join(' ').toLowerCase()}
-    function applyFilters(){
-      const q=$('q').value.trim().toLowerCase(),type=$('type').value,from=$('from').value,to=$('to').value;
-      filtered=items.filter(item=>(!type||item.type===type)&&(!from||item.date>=from)&&(!to||item.date<=to)&&(!q||searchText(item).includes(q)));
-      const sort=$('sort').value;
-      filtered.sort((a,b)=>sort==='score'?(b.score||0)-(a.score||0):sort==='first'?String(b.first_seen||b.date).localeCompare(String(a.first_seen||a.date)):String(b.last_seen||b.date).localeCompare(String(a.last_seen||a.date)));
-      page=1;render();
-    }
-
-    function render(){
-      const pages=Math.max(1,Math.ceil(filtered.length/PAGE_SIZE));page=Math.min(page,pages);
-      const visible=filtered.slice((page-1)*PAGE_SIZE,page*PAGE_SIZE);
-      $('status').textContent=`找到 ${filtered.length} 条，当前显示 ${visible.length} 条`;
-      $('pageInfo').textContent=`第 ${page} / ${pages} 页`;$('prev').disabled=page<=1;$('next').disabled=page>=pages;
-      if(!visible.length){$('results').innerHTML='<p class="muted">没有匹配结果。</p>';return}
-      $('results').innerHTML=visible.map(item=>{
-        const url=safeUrl(item.url);const title=url?`<a class="title" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(item.title)}</a>`:`<span class="title">${esc(item.title)}</span>`;
-        return `<article class="item">${title}<div class="meta"><span class="pill ${esc(item.type)}">${esc(typeLabel(item.type))}</span>${item.short_id?`<span>${esc(item.short_id)}</span>`:''}<span>${esc(item.source)}</span><span>${esc(item.category)}</span><span>${esc(item.score)} 分</span><span>首次 ${esc(item.first_seen||item.date)}</span><span>最新 ${esc(item.last_seen||item.date)}</span><span>出现 ${esc(item.occurrence_count||1)} 次</span></div>${item.summary?`<details><summary>${url?'查看短摘要':'查看事件详情'}</summary><p>${esc(item.summary)}</p></details>`:''}</article>`;
-      }).join('');
-    }
-
-    ['q','type','from','to','sort'].forEach(id=>$(id).addEventListener('input',applyFilters));
-    $('prev').addEventListener('click',()=>{if(page>1){page--;render()}});$('next').addEventListener('click',()=>{if(page*PAGE_SIZE<filtered.length){page++;render()}});
-    loadHistory();
-  </script>
-</body>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex,nofollow">
+    <meta http-equiv="refresh" content="0;url=https://neutriverse.uk/ravenis/">
+    <title>Ravenis 已迁移</title>
+    <script>
+      const target = new URL('https://neutriverse.uk/ravenis/');
+      target.search = window.location.search;
+      target.hash = window.location.hash;
+      window.location.replace(target.toString());
+    </script>
+  </head>
+  <body>
+    <p>Ravenis 历史简报已迁移至 <a href="https://neutriverse.uk/ravenis/">Neutriverse</a>。</p>
+  </body>
 </html>

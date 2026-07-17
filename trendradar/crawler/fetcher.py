@@ -12,7 +12,7 @@
 import json
 import random
 import time
-from typing import Dict, List, Tuple, Optional, Union
+from typing import Dict, List, Optional, Tuple, Union
 from urllib.parse import urlparse
 
 import requests
@@ -196,7 +196,7 @@ class DataFetcher:
                             print(f"   预期域名: https://*.{expected_domain}")
                             print(f"   异常来源: {bad_reason}")
                             print(f"   当前 API 地址: {self.api_url}")
-                            print(f"   该平台数据已丢弃，请检查 API 来源是否可信")
+                            print("   该平台数据已丢弃，请检查 API 来源是否可信")
                             failed_ids.append(id_value)
                             continue
 

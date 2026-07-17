@@ -11,8 +11,7 @@ from typing import Dict, List
 
 import requests
 
-from ..utils.errors import MCPError, InvalidParameterError
-
+from ..utils.errors import InvalidParameterError, MCPError
 
 # Jina Reader 配置
 JINA_READER_BASE = "https://r.jina.ai"

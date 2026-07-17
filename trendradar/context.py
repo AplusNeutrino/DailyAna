@@ -9,38 +9,38 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from trendradar.utils.time import (
-    DEFAULT_TIMEZONE,
-    get_configured_time,
-    format_date_folder,
-    format_time_filename,
-    get_current_time_display,
-    convert_time_for_display,
-    format_iso_time_friendly,
-    is_within_days,
-)
+from trendradar.ai import AITranslator
+from trendradar.ai.filter import AIFilter, AIFilterResult
 from trendradar.core import (
+    Scheduler,
+    count_word_frequency,
+    detect_latest_new_titles,
     load_frequency_words,
     matches_word_groups,
     read_all_today_titles,
-    detect_latest_new_titles,
-    count_word_frequency,
-    Scheduler,
-)
-from trendradar.report import (
-    prepare_report_data,
-    generate_html_report,
-    render_html_content,
 )
 from trendradar.notification import (
-    render_feishu_content,
-    render_dingtalk_content,
-    split_content_into_batches,
     NotificationDispatcher,
+    render_dingtalk_content,
+    render_feishu_content,
+    split_content_into_batches,
 )
-from trendradar.ai import AITranslator
-from trendradar.ai.filter import AIFilter, AIFilterResult
+from trendradar.report import (
+    generate_html_report,
+    prepare_report_data,
+    render_html_content,
+)
 from trendradar.storage import get_storage_manager
+from trendradar.utils.time import (
+    DEFAULT_TIMEZONE,
+    convert_time_for_display,
+    format_date_folder,
+    format_iso_time_friendly,
+    format_time_filename,
+    get_configured_time,
+    get_current_time_display,
+    is_within_days,
+)
 
 
 class AppContext:
@@ -550,7 +550,7 @@ class AppContext:
         effective_interests_file = configured_interests or "ai_interests.txt"
 
         if debug:
-            print(f"[AI筛选][DEBUG] === 配置信息 ===")
+            print("[AI筛选][DEBUG] === 配置信息 ===")
             print(f"[AI筛选][DEBUG] 存储后端: {self.get_storage_manager().backend_name}")
             print(f"[AI筛选][DEBUG] batch_size={filter_config.get('BATCH_SIZE', 200)}, "
                   f"batch_interval={filter_config.get('BATCH_INTERVAL', 5)}")
@@ -603,7 +603,7 @@ class AppContext:
 
                 if update_result is None:
                     # AI 标签更新失败，回退到重新提取全部标签
-                    print(f"[AI筛选] AI 标签更新失败，回退到重新提取")
+                    print("[AI筛选] AI 标签更新失败，回退到重新提取")
                     tags_data = ai_filter.extract_tags(interests_content)
                     if not tags_data:
                         storage.end_batch()
@@ -824,7 +824,7 @@ class AppContext:
         all_results = storage.get_active_ai_filter_results(interests_file=effective_interests_file)
 
         if debug:
-            print(f"[AI筛选][DEBUG] === 最终汇总 ===")
+            print("[AI筛选][DEBUG] === 最终汇总 ===")
             print(f"[AI筛选][DEBUG] 数据库 active 分类结果: {len(all_results)} 条")
             # 按标签统计
             tag_counts: dict = {}

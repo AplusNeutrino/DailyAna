@@ -13,17 +13,17 @@
 - generator: 报告生成器
 """
 
+from trendradar.report.formatter import format_title_for_platform
+from trendradar.report.generator import (
+    generate_html_report,
+    prepare_report_data,
+)
 from trendradar.report.helpers import (
     clean_title,
-    html_escape,
     format_rank_display,
+    html_escape,
 )
-from trendradar.report.formatter import format_title_for_platform
 from trendradar.report.html import render_html_content
-from trendradar.report.generator import (
-    prepare_report_data,
-    generate_html_report,
-)
 
 __all__ = [
     # 辅助函数

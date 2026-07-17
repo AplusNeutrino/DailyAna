@@ -8,9 +8,9 @@
 - count_word_frequency: 统计词频
 """
 
-from typing import Dict, List, Tuple, Optional, Callable
+from typing import Callable, Dict, List, Optional, Tuple
 
-from trendradar.core.frequency import matches_word_groups, _word_matches
+from trendradar.core.frequency import _word_matches, matches_word_groups
 from trendradar.utils.time import DEFAULT_TIMEZONE
 
 

@@ -6,10 +6,9 @@
 """
 
 from datetime import datetime
-from typing import Dict, List, Optional, Callable
+from typing import Callable, Dict, List, Optional
 
 from trendradar.report.formatter import format_title_for_platform
-
 
 # 默认区域顺序
 DEFAULT_REGION_ORDER = ["hotlist", "rss", "new_items", "standalone", "ai_analysis"]
@@ -173,9 +172,6 @@ def render_dingtalk_content(
     if region_order is None:
         region_order = DEFAULT_REGION_ORDER
 
-    total_titles = sum(
-        len(stat["titles"]) for stat in report_data["stats"] if stat["count"] > 0
-    )
     now = get_time_func() if get_time_func else datetime.now()
 
     # 头部信息由 splitter 统一构建，此处不再重复

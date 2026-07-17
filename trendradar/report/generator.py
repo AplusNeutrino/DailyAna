@@ -8,7 +8,7 @@
 """
 
 from pathlib import Path
-from typing import Dict, List, Optional, Callable
+from typing import Callable, Dict, List, Optional
 
 
 def prepare_report_data(

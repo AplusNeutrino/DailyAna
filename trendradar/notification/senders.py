@@ -33,6 +33,7 @@ import requests
 
 from trendradar.intelligence import (
     archive_intelligence_to_r2,
+    build_digest_summary,
     build_intelligence_package,
     render_wechat_intelligence_messages,
 )
@@ -601,8 +602,16 @@ def send_to_wework(
                 now=get_time_func() if get_time_func else datetime.now(),
                 config=intelligence_config,
             )
+            digest_summary = build_digest_summary(
+                package,
+                getattr(ai_analysis, "digest_summary", None) if ai_analysis else None,
+                intelligence_config,
+            )
             batches = render_wechat_intelligence_messages(
-                package, intelligence_config, max_bytes=batch_size
+                package,
+                digest_summary,
+                intelligence_config,
+                max_bytes=batch_size,
             )
             archive_ok = archive_intelligence_to_r2(package, batches, intelligence_config)
             logical_batches = bool(batches)
@@ -665,11 +674,8 @@ def send_to_wework(
     if notification_ok and not archive_ok:
         print(f"{log_prefix}通知已发送，但必需的情报归档失败 [{report_type}]")
     if package is not None:
-        ai_status = (
-            "success"
-            if ai_analysis is not None and getattr(ai_analysis, "success", False)
-            else "degraded" if ai_analysis is not None else "skipped"
-        )
+        digest_status = (package.get("digest_summary") or {}).get("status", "rules")
+        ai_status = "success" if digest_status == "ai" else "degraded"
         summary = {
             "slot": package.get("slot", ""),
             "profile": os.environ.get("DAILYANA_PROFILE", ""),

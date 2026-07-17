@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from trendradar.storage.base import NewsItem, NewsData, RSSItem, RSSData
+from trendradar.storage.base import NewsData, NewsItem, RSSData, RSSItem
 from trendradar.utils.url import normalize_url
 
 

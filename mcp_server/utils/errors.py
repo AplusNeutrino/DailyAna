@@ -4,8 +4,7 @@
 定义MCP Server使用的所有自定义异常类型。
 """
 
-from typing import Optional, List, Callable
-
+from typing import Callable, List, Optional
 
 # ==================== 延迟加载支持的平台列表 ====================
 

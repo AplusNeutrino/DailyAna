@@ -7,8 +7,8 @@
 import hashlib
 import json
 import time
-from typing import Any, Optional
 from threading import Lock
+from typing import Any, Optional
 
 
 def make_cache_key(namespace: str, **params) -> str:

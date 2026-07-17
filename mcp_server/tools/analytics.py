@@ -8,24 +8,23 @@ import os
 import re
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Union
 from difflib import SequenceMatcher
+from typing import Dict, List, Optional, Union
 
 import yaml
 
 from trendradar.core.analyzer import calculate_news_weight as _calculate_news_weight
 
 from ..services.data_service import DataService
+from ..utils.errors import DataNotFoundError, InvalidParameterError, MCPError
 from ..utils.validators import (
-    validate_platforms,
-    validate_limit,
-    validate_keyword,
-    validate_top_n,
     validate_date_range,
-    validate_threshold
+    validate_keyword,
+    validate_limit,
+    validate_platforms,
+    validate_threshold,
+    validate_top_n,
 )
-from ..utils.errors import MCPError, InvalidParameterError, DataNotFoundError
-
 
 # 权重配置 mtime 缓存（避免重复读取同一配置文件）
 _weight_config_cache: Optional[Dict] = None
@@ -884,7 +883,7 @@ class AnalyticsTools:
         prompt_parts.append("")
 
         # 2. 数据概览
-        prompt_parts.append(f"数据概览：")
+        prompt_parts.append("数据概览：")
         prompt_parts.append(f"- 总新闻数：{len(news_data)}")
         prompt_parts.append(f"- 覆盖平台：{len(platform_news)}")
 
