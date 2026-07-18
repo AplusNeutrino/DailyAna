@@ -114,6 +114,80 @@ def test_invalid_event_clusters_are_skipped_from_every_public_projection(capsys)
     assert "skipped_invalid_clusters=1" in capsys.readouterr().out
 
 
+def test_daily_run_references_are_filtered_after_cross_date_merge():
+    output = Path("tests/_runtime_history")
+    old_only = public_record(
+        id="r_old",
+        date="2026-07-15",
+        title="Old-day record",
+        last_seen="2026-07-15T02:00:00",
+    )
+    shared_latest = public_record(
+        id="r_shared",
+        date="2026-07-16",
+        title="Shared record latest appearance",
+        first_seen="2026-07-15T01:00:00",
+        last_seen="2026-07-16T02:00:00",
+        occurrence_count=2,
+    )
+    old_run = {
+        "date": "2026-07-15",
+        "slot": "B",
+        "perspective": "B",
+        "source": "ravenis",
+        "generated_at": "2026-07-15T14:05:00",
+        "record_ids": ["r_shared", "r_old"],
+        "ranking": [
+            {"id": "r_shared", "score": 90, "reasons": ["cross-date"]},
+            {"id": "r_old", "score": 70, "reasons": ["same-day"]},
+        ],
+        "summary": {
+            "status": "rules",
+            "overview": "Daily summary",
+            "top_items": [
+                {"id": "r_shared", "evidence_ids": ["r_shared"]},
+                {"id": "r_old", "evidence_ids": ["r_old"]},
+            ],
+            "watchlist": [
+                {"text": "Watch shared", "evidence_ids": ["r_shared"]},
+                {"text": "Watch old", "evidence_ids": ["r_old"]},
+            ],
+        },
+    }
+    latest_run = {
+        "date": "2026-07-16",
+        "slot": "B",
+        "perspective": "B",
+        "source": "ravenis",
+        "generated_at": "2026-07-16T14:05:00",
+        "record_ids": ["r_shared"],
+        "ranking": [{"id": "r_shared", "score": 92, "reasons": ["latest"]}],
+        "summary": {"status": "rules", "overview": "Latest", "top_items": [], "watchlist": []},
+    }
+
+    write_site(
+        output,
+        [old_only, shared_latest],
+        retention_days=30,
+        runs=[old_run, latest_run],
+    )
+
+    old_day = json.loads((output / "days" / "2026-07-15.json").read_text(encoding="utf-8"))
+    latest_day = json.loads((output / "days" / "2026-07-16.json").read_text(encoding="utf-8"))
+    assert [item["id"] for item in old_day["items"]] == ["r_old"]
+    assert old_day["runs"][0]["record_ids"] == ["r_old"]
+    assert [item["id"] for item in old_day["runs"][0]["ranking"]] == ["r_old"]
+    assert [item["id"] for item in old_day["runs"][0]["summary"]["top_items"]] == ["r_old"]
+    assert old_day["runs"][0]["summary"]["watchlist"] == [
+        {"text": "Watch old", "evidence_ids": ["r_old"]},
+    ]
+    assert [item["id"] for item in latest_day["items"]] == ["r_shared"]
+    assert latest_day["runs"][0]["record_ids"] == ["r_shared"]
+    for day in (old_day, latest_day):
+        day_ids = {item["id"] for item in day["items"]}
+        assert all(set(run["record_ids"]).issubset(day_ids) for run in day["runs"])
+
+
 def test_legacy_migration_does_not_create_single_source_clusters():
     base = {
         "cluster_id": "c_legacy", "title": "芯片相关信号", "source_count": 1,
