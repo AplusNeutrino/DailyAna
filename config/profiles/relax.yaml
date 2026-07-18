@@ -5,7 +5,7 @@
 content:
   selected_categories:
     - leisure
-    - current_events
+    - current_events_relax
 
 notification:
   enabled: true
