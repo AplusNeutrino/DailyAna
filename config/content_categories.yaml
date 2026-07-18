@@ -1,20 +1,18 @@
 # Ravenis Core content category mapping.
 #
-# Profiles select categories by key. Each category contains the hotlist platforms,
-# RSS feeds, and keyword groups that should be active when selected.
+# Scheduled profiles select exactly one of the three categories below. Personal
+# RSS subscriptions live in Ravenis-Secrets; the public defaults only define the
+# disjoint platform and keyword boundaries.
 
 categories:
-  frontier:
-    name: 前沿
-    description: AI、数据、科技、产业与前沿公司
+  work_academic:
+    name: 工作与学术
+    description: AI、科技、产业、专业知识与工作成长
     platforms:
       - wallstreetcn-hot
       - cls-hot
       - zhihu
-    rss_feeds:
-      - hacker-news
-      - yahoo-finance
-      - ruanyifeng
+    rss_feeds: []
     keyword_groups:
       - DeepSeek
       - 华为
@@ -36,9 +34,30 @@ categories:
       - 量子
       - 生产力
 
-  leisure:
-    name: 休闲
-    description: 游戏、影视、泛娱乐与轻内容
+  general_news:
+    name: 综合时事
+    description: 国内外公共事件、宏观动态、财经与综合新闻
+    platforms:
+      - baidu
+      - thepaper
+      - toutiao
+      - ifeng
+    rss_feeds: []
+    keyword_groups:
+      - 中国
+      - 东亚
+      - 北美
+      - 西欧
+      - 俄罗斯
+      - 印度
+      - 京东
+      - 字节跳动
+      - 腾讯
+      - 胖东来
+
+  entertainment:
+    name: 娱乐与生活
+    description: 游戏、影视、数码消费、社交内容与轻阅读
     platforms:
       - bilibili-hot-search
       - tieba
@@ -50,48 +69,4 @@ categories:
       - 影之刃零
       - 三体/流浪地球
       - 申奥
-      - 胖东来
-
-  current_events_work:
-    name: 工作时事
-    description: 来自严肃新闻、财经与知识平台的公共事件和宏观动态
-    platforms:
-      - baidu
-      - thepaper
-      - wallstreetcn-hot
-      - cls-hot
-      - zhihu
-    rss_feeds:
-      - yahoo-finance
-    keyword_groups:
-      - 中国
-      - 东亚
-      - 北美
-      - 西欧
-      - 俄罗斯
-      - 印度
-      - 京东
-      - 字节跳动
-      - 腾讯
-      - 胖东来
-
-  current_events_relax:
-    name: 休闲时事
-    description: 来自综合资讯与社交平台的公共事件和轻量热点
-    platforms:
-      - toutiao
-      - ifeng
-      - weibo
-      - douyin
-    rss_feeds: []
-    keyword_groups:
-      - 中国
-      - 东亚
-      - 北美
-      - 西欧
-      - 俄罗斯
-      - 印度
-      - 京东
-      - 字节跳动
-      - 腾讯
       - 胖东来

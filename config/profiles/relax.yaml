@@ -4,8 +4,7 @@
 
 content:
   selected_categories:
-    - leisure
-    - current_events_relax
+    - entertainment
 
 notification:
   enabled: true

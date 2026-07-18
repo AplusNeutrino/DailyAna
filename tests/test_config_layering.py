@@ -41,7 +41,7 @@ def test_config_precedence_public_private_profile_env(monkeypatch):
     assert loaded["CONFIG_SOURCES"]["private"] == str(private.resolve())
 
 
-def test_work_and_relax_sources_are_disjoint():
+def test_scheduled_profile_sources_are_disjoint():
     categories = yaml.safe_load(
         (ROOT / "config" / "content_categories.yaml").read_text(encoding="utf-8")
     )["categories"]
@@ -59,17 +59,90 @@ def test_work_and_relax_sources_are_disjoint():
             for source_id in categories[category_id].get(field, [])
         }
 
-    work_platforms = sources_for("work", "platforms")
-    relax_platforms = sources_for("relax", "platforms")
-    work_rss = sources_for("work", "rss_feeds")
-    relax_rss = sources_for("relax", "rss_feeds")
+    expected_platforms = {
+        "work": {"wallstreetcn-hot", "cls-hot", "zhihu"},
+        "general": {"baidu", "thepaper", "toutiao", "ifeng"},
+        "relax": {"bilibili-hot-search", "tieba", "weibo", "douyin"},
+    }
+    platform_sets = {
+        profile: sources_for(profile, "platforms") for profile in expected_platforms
+    }
+    rss_sets = {
+        profile: sources_for(profile, "rss_feeds") for profile in expected_platforms
+    }
 
-    assert work_platforms == {
-        "baidu", "thepaper", "wallstreetcn-hot", "cls-hot", "zhihu"
+    assert platform_sets == expected_platforms
+    assert all(not rss_ids for rss_ids in rss_sets.values())
+    for profile, sources in platform_sets.items():
+        others = set().union(
+            *(items for name, items in platform_sets.items() if name != profile)
+        )
+        assert sources.isdisjoint(others)
+
+
+def test_private_abc_profiles_filter_platforms_and_rss(monkeypatch):
+    root = Path("tests/_runtime_config/abc")
+    public = root / "public" / "config.yaml"
+    private_dir = root / "private"
+    private = private_dir / "config.yaml"
+    platforms = [
+        {"id": "platform-a", "name": "A"},
+        {"id": "platform-b", "name": "B"},
+        {"id": "platform-c", "name": "C"},
+    ]
+    feeds = [
+        {"id": "feed-a", "name": "A", "url": "https://rsshub.app/example/a"},
+        {"id": "feed-b", "name": "B", "url": "https://example.com/b.xml"},
+        {"id": "feed-c", "name": "C", "url": "https://rsshub.app/example/c"},
+    ]
+    write_yaml(
+        public,
+        {
+            "platforms": {"enabled": True, "sources": platforms},
+            "rss": {"enabled": True, "feeds": feeds},
+        },
+    )
+    write_yaml(private, {"rss": {"rsshub_base_url": "https://rsshub.example"}})
+    write_yaml(
+        private_dir / "content_categories.yaml",
+        {
+            "categories": {
+                "work_academic": {
+                    "platforms": ["platform-a"],
+                    "rss_feeds": ["feed-a"],
+                },
+                "general_news": {
+                    "platforms": ["platform-b"],
+                    "rss_feeds": ["feed-b"],
+                },
+                "entertainment": {
+                    "platforms": ["platform-c"],
+                    "rss_feeds": ["feed-c"],
+                },
+            }
+        },
+    )
+    profile_categories = {
+        "work": "work_academic",
+        "general": "general_news",
+        "relax": "entertainment",
     }
-    assert relax_platforms == {
-        "toutiao", "ifeng", "bilibili-hot-search", "tieba", "weibo", "douyin"
+    for profile, category in profile_categories.items():
+        write_yaml(
+            private_dir / "profiles" / f"{profile}.yaml",
+            {"content": {"selected_categories": [category]}},
+        )
+
+    monkeypatch.setenv("RAVENIS_PRIVATE_CONFIG", str(private.resolve()))
+    monkeypatch.setenv("RAVENIS_PRIVATE_CONFIG_DIR", str(private_dir.resolve()))
+    expected_urls = {
+        "work": "https://rsshub.example/example/a",
+        "general": "https://example.com/b.xml",
+        "relax": "https://rsshub.example/example/c",
     }
-    assert work_platforms.isdisjoint(relax_platforms)
-    assert work_rss == {"hacker-news", "yahoo-finance", "ruanyifeng"}
-    assert relax_rss == set()
+    for profile, suffix in (("work", "a"), ("general", "b"), ("relax", "c")):
+        monkeypatch.setenv("DAILYANA_PROFILE", profile)
+        loaded = load_config(str(public))
+        assert [item["id"] for item in loaded["PLATFORMS"]] == [f"platform-{suffix}"]
+        assert [item["id"] for item in loaded["RSS"]["FEEDS"]] == [f"feed-{suffix}"]
+        assert loaded["RSS"]["FEEDS"][0]["url"] == expected_urls[profile]
