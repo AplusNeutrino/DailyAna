@@ -21,6 +21,7 @@ from tools.build_history_index import (
     validate_run,
     write_site,
 )
+from tools.migrate_legacy_history import extract_legacy_json
 
 
 def test_history_publisher_direct_entrypoint_imports_project_package():
@@ -84,6 +85,49 @@ def test_daily_shards_and_small_manifest():
     assert (output / "weekly" / "latest.json").exists()
     assert (output / "search-index.json").exists()
     assert (output / "manifest.json").stat().st_size < 2 * 1024 * 1024
+
+
+def test_invalid_event_clusters_are_skipped_from_every_public_projection(capsys):
+    output = Path("tests/_runtime_history")
+    news = public_record(id="n_1", title="芯片新闻")
+    invalid = public_record(
+        id="c_invalid", type="event_cluster", title="芯片相关信号", url="",
+        source="0 个独立来源", source_count=1, occurrence_count=1,
+    )
+    valid = public_record(
+        id="c_valid", type="event_cluster", title="芯片供应链价格变化", url="",
+        source="2 个独立来源", source_count=2, occurrence_count=2,
+    )
+    run = {
+        "date": news["date"], "slot": "B", "source": "ravenis", "generated_at": news["last_seen"],
+        "record_ids": [news["id"], invalid["id"], valid["id"]],
+        "summary": {"status": "rules", "overview": "摘要", "top_items": [], "watchlist": []},
+    }
+    write_site(output, [news, invalid, valid], retention_days=30, runs=[run])
+    shard = json.loads((output / "days" / f"{news['date']}.json").read_text(encoding="utf-8"))
+    search = json.loads((output / "search-index.json").read_text(encoding="utf-8"))
+    manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+    assert {item["id"] for item in shard["items"]} == {"n_1", "c_valid"}
+    assert {item["id"] for item in search["items"]} == {"n_1", "c_valid"}
+    assert shard["runs"][0]["record_ids"] == ["n_1", "c_valid"]
+    assert manifest["total"] == 2
+    assert "skipped_invalid_clusters=1" in capsys.readouterr().out
+
+
+def test_legacy_migration_does_not_create_single_source_clusters():
+    base = {
+        "cluster_id": "c_legacy", "title": "芯片相关信号", "source_count": 1,
+        "related_item_ids": ["n_1"], "category": "芯片 / 算力",
+    }
+    assert extract_legacy_json(base, "2026-07-15", "cluster") is None
+    migrated = extract_legacy_json(
+        dict(base, source_count=2, related_item_ids=["n_1", "n_2"]),
+        "2026-07-15",
+        "cluster",
+    )
+    assert migrated is not None
+    assert migrated["source_count"] == 2
+    assert migrated["occurrence_count"] == 2
 
 
 def test_daily_shard_preserves_strict_run_summary():
