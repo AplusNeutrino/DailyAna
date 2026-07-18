@@ -139,6 +139,51 @@ def validate_record(record: Any, key: str) -> dict[str, Any]:
     return clean
 
 
+def is_valid_event_cluster(record: dict[str, Any]) -> bool:
+    """Keep only clusters backed by at least two records and two sources."""
+    if record.get("type") != "event_cluster":
+        return True
+    source_count = int(record.get("source_count") or 0)
+    member_count = int(record.get("occurrence_count") or 0)
+    source_label = str(record.get("source") or "").strip()
+    contradicts_count = bool(re.match(r"^[01]\s*个(?:独立|公开)?来源", source_label))
+    return source_count >= 2 and member_count >= 2 and not contradicts_count
+
+
+def partition_publishable_records(
+    records: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int]:
+    publishable = [record for record in records if is_valid_event_cluster(record)]
+    return publishable, len(records) - len(publishable)
+
+
+def filter_runs_to_records(
+    runs: list[dict[str, Any]],
+    record_ids: set[str],
+) -> list[dict[str, Any]]:
+    """Remove skipped records and their summary references without failing old releases."""
+    filtered = []
+    for run in runs:
+        clean = dict(run)
+        clean["record_ids"] = [value for value in run.get("record_ids", []) if value in record_ids]
+        if not clean["record_ids"]:
+            continue
+        summary = dict(run.get("summary") or {})
+        summary["top_items"] = [
+            item for item in summary.get("top_items", [])
+            if item.get("id") in record_ids
+            and all(value in record_ids for value in item.get("evidence_ids", []))
+        ]
+        summary["watchlist"] = [
+            item for item in summary.get("watchlist", [])
+            if item.get("evidence_ids")
+            and all(value in record_ids for value in item.get("evidence_ids", []))
+        ]
+        clean["summary"] = summary
+        filtered.append(clean)
+    return filtered
+
+
 def _compact_text(value: Any, limit: int) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()[:limit]
 
@@ -367,11 +412,19 @@ def write_site(
     runs: list[dict[str, Any]] | None = None,
     weekly_records: list[dict[str, Any]] | None = None,
 ) -> Path:
+    records, skipped_invalid_clusters = partition_publishable_records(records)
+    if not records:
+        raise RuntimeError("no publishable public records; refusing to replace the current site")
+    runs = filter_runs_to_records(runs or [], {record["id"] for record in records})
+    weekly_records, weekly_skipped = partition_publishable_records(weekly_records or records)
+    skipped_invalid_clusters = max(skipped_invalid_clusters, weekly_skipped)
+    if skipped_invalid_clusters:
+        print(f"[history] skipped_invalid_clusters={skipped_invalid_clusters}")
     grouped: dict[str, list[dict[str, Any]]] = {}
     for record in records:
         grouped.setdefault(record["date"], []).append(record)
     runs_by_date: dict[str, list[dict[str, Any]]] = {}
-    for run in runs or []:
+    for run in runs:
         runs_by_date.setdefault(run["date"], []).append(run)
     generated_at = utc_now().isoformat(timespec="seconds")
     staging = output_dir.parent / f".{output_dir.name}-staging"
@@ -394,7 +447,7 @@ def write_site(
             )
             day_entries.append({"date": date, "count": len(items), "path": f"days/{date}.json"})
         weekly_payload = build_weekly_digest(
-            weekly_records or records,
+            weekly_records,
             end_date=max(grouped),
             window_days=7,
             max_themes=12,
@@ -405,7 +458,7 @@ def write_site(
         weekly_path.write_text(
             json.dumps(weekly_payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8"
         )
-        search_payload = build_search_index(records, runs or [])
+        search_payload = build_search_index(records, runs)
         search_path = staging / "search-index.json"
         search_path.write_text(
             json.dumps(search_payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8"
@@ -419,7 +472,7 @@ def write_site(
             "run_count": sum(len(value) for value in runs_by_date.values()),
             "days": day_entries,
             "types": sorted({record["type"] for record in records}),
-            "slots": sorted({run.get("slot", "") for run in runs or [] if run.get("slot")}),
+            "slots": sorted({run.get("slot", "") for run in runs if run.get("slot")}),
             "weekly": {
                 "path": "weekly/latest.json",
                 "start_date": weekly_payload["start_date"],
@@ -517,10 +570,18 @@ def build_index(
             projection_date,
             {record["id"] for record in projection_records},
         ))
-    merged = merge_records(records)
+    merged, skipped_merged_clusters = partition_publishable_records(merge_records(records))
+    weekly_records, skipped_input_clusters = partition_publishable_records(records)
     if not merged:
         raise RuntimeError("all public projections were empty; refusing to publish an empty site")
-    manifest_path = write_site(output_dir, merged, retention_days, runs=runs, weekly_records=records)
+    runs = filter_runs_to_records(runs, {record["id"] for record in merged})
+    manifest_path = write_site(
+        output_dir,
+        merged,
+        retention_days,
+        runs=runs,
+        weekly_records=weekly_records,
+    )
     if upload_key:
         upload_site(client, bucket, output_dir, upload_key)
     if release_prefix or pointer_key:
@@ -529,7 +590,8 @@ def build_index(
         publish_release(client, bucket, output_dir, release_prefix, pointer_key, retention_days)
     print(
         f"[history] projections={len(keys)} input_records={len(records)} "
-        f"published_records={len(merged)} manifest={manifest_path}"
+        f"published_records={len(merged)} skipped_invalid_clusters={skipped_input_clusters} "
+        f"skipped_merged_clusters={skipped_merged_clusters} manifest={manifest_path}"
     )
     return len(merged)
 

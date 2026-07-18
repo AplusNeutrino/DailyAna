@@ -202,20 +202,26 @@ def extract_legacy_json(data: dict[str, Any], date: str, kind: str) -> dict[str,
     title = str(data.get("title") or "").strip()
     if not title:
         return None
+    source_count = int(data.get("source_count") or 0)
+    related_item_ids = list(dict.fromkeys(
+        str(value).strip() for value in (data.get("related_item_ids") or []) if str(value).strip()
+    ))
+    if source_count < 2 or len(related_item_ids) < 2:
+        return None
     return record(
         item_id=data.get("cluster_id") or stable_id(title, "", "c"),
         short_id=data.get("short_cluster_id", ""),
         date=date,
         item_type="event_cluster",
         title=title,
-        source=f"{int(data.get('source_count') or 0)} 个独立来源",
-        source_count=max(1, int(data.get("source_count") or 1)),
+        source=f"{source_count} 个独立来源",
+        source_count=source_count,
         category=data.get("category", ""),
         tags=(data.get("tags") or [])[:10],
         score=int(data.get("cluster_score") or 0),
         first_seen=data.get("created_at", ""),
         last_seen=data.get("created_at", ""),
-        occurrence_count=max(1, len(data.get("related_item_ids") or [])),
+        occurrence_count=len(related_item_ids),
         summary=data.get("summary", ""),
     )
 
