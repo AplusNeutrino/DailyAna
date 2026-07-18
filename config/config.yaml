@@ -98,7 +98,7 @@ slots:
     time: '14:15'
   C:
     label: 晚间
-    time: '18:10'
+    time: '17:10'
 scoring:
   thresholds:
     altar: 80
