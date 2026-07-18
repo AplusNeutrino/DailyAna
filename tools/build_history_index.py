@@ -468,7 +468,6 @@ def write_site(
     records, skipped_invalid_clusters = partition_publishable_records(records)
     if not records:
         raise RuntimeError("no publishable public records; refusing to replace the current site")
-    runs = filter_runs_to_records(runs or [], {record["id"] for record in records})
     weekly_records, weekly_skipped = partition_publishable_records(weekly_records or records)
     skipped_invalid_clusters = max(skipped_invalid_clusters, weekly_skipped)
     if skipped_invalid_clusters:
@@ -476,6 +475,20 @@ def write_site(
     grouped: dict[str, list[dict[str, Any]]] = {}
     for record in records:
         grouped.setdefault(record["date"], []).append(record)
+    daily_record_ids = {
+        date: {record["id"] for record in day_records}
+        for date, day_records in grouped.items()
+    }
+    daily_runs = []
+    for run in runs or []:
+        # Records are merged across the retention window and assigned to their
+        # latest date. A run from an earlier date must not retain references to
+        # a record that now lives in a different daily shard.
+        daily_runs.extend(filter_runs_to_records(
+            [run],
+            daily_record_ids.get(str(run.get("date") or ""), set()),
+        ))
+    runs = daily_runs
     runs_by_date: dict[str, list[dict[str, Any]]] = {}
     for run in runs:
         runs_by_date.setdefault(run["date"], []).append(run)
