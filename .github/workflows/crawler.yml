@@ -3,9 +3,8 @@ name: Ravenis Core - Daily Intelligence
 on:
   schedule:
     # GitHub cron uses UTC; the mapping below is explicit and stable.
-    - cron: "0 22 * * *"  # 06:00 Beijing -> A/work
-    - cron: "15 6 * * *"  # 14:15 Beijing -> B/work
-    - cron: "10 10 * * *" # 18:10 Beijing -> C/relax
+    - cron: "0 22 * * *" # 06:00 Beijing -> A/work
+    - cron: "10 9 * * *" # 17:10 Beijing -> C/relax
   workflow_dispatch:
     inputs:
       slot:
@@ -52,8 +51,7 @@ jobs:
           else
             case "$SCHEDULE" in
               "0 22 * * *") slot=A; profile=work ;;
-              "15 6 * * *") slot=B; profile=work ;;
-              "10 10 * * *") slot=C; profile=relax ;;
+              "10 9 * * *") slot=C; profile=relax ;;
               *) echo "Unknown schedule: $SCHEDULE" >&2; exit 2 ;;
             esac
           fi

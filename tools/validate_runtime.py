@@ -16,9 +16,10 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_CRONS = {
     "0 22 * * *": ("A", "work"),
-    "15 6 * * *": ("B", "work"),
-    "10 10 * * *": ("C", "relax"),
+    "10 9 * * *": ("C", "relax"),
 }
+EXPECTED_AI_DIGEST_CRONS = {"5 6 * * *"}
+EXPECTED_SLOT_TIMES = {"A": "06:00", "C": "17:10"}
 REQUIRED_PRODUCTION_ENV = (
     "WEWORK_WEBHOOK_URL",
     "WEWORK_MSG_TYPE",
@@ -119,6 +120,13 @@ def validate(args: argparse.Namespace) -> tuple[list[str], list[str]]:
             errors.append(f"invalid slot ID: {slot_id}")
         if not re.fullmatch(r"(?:[01]?\d|2[0-3]):[0-5]\d", str((spec or {}).get("time", ""))):
             errors.append(f"invalid slot time: {slot_id}")
+    for slot_id, expected_time in EXPECTED_SLOT_TIMES.items():
+        actual_time = str((slots.get(slot_id) or {}).get("time", ""))
+        if actual_time != expected_time:
+            errors.append(
+                f"slot {slot_id} time differs from production schedule: "
+                f"expected {expected_time}, got {actual_time or 'missing'}"
+            )
 
     for label, items in (
         ("platform", (config.get("platforms") or {}).get("sources") or []),
@@ -137,6 +145,47 @@ def validate(args: argparse.Namespace) -> tuple[list[str], list[str]]:
         dangling = sorted(set(selected) - set(category_map))
         if dangling:
             errors.append(f"unknown selected content categories: {', '.join(dangling)}")
+
+        profile_sources: dict[str, dict[str, set[str]]] = {}
+        for profile_name in ("work", "relax"):
+            candidate = next(
+                (
+                    directory / f"{profile_name}.yaml"
+                    for directory in profile_dirs
+                    if (directory / f"{profile_name}.yaml").exists()
+                ),
+                None,
+            )
+            if candidate is None:
+                errors.append(f"profile does not exist: {profile_name}")
+                continue
+            profile_data = read_yaml(candidate)
+            category_ids = (profile_data.get("content") or {}).get("selected_categories") or []
+            dangling_profile = sorted(set(category_ids) - set(category_map))
+            if dangling_profile:
+                errors.append(
+                    f"profile {profile_name} references unknown content categories: "
+                    + ", ".join(dangling_profile)
+                )
+                continue
+            profile_sources[profile_name] = {
+                field: {
+                    str(source_id)
+                    for category_id in category_ids
+                    for source_id in (category_map.get(category_id) or {}).get(field, []) or []
+                }
+                for field in ("platforms", "rss_feeds")
+            }
+
+        if set(profile_sources) == {"work", "relax"}:
+            for field, label in (("platforms", "platform"), ("rss_feeds", "RSS")):
+                overlap = sorted(
+                    profile_sources["work"][field] & profile_sources["relax"][field]
+                )
+                if overlap:
+                    errors.append(
+                        f"work/relax {label} sources overlap: {', '.join(overlap)}"
+                    )
     except Exception as exc:
         errors.append(f"content categories: {exc}")
 
@@ -183,6 +232,16 @@ def validate(args: argparse.Namespace) -> tuple[list[str], list[str]]:
     for cron, (slot, profile) in EXPECTED_CRONS.items():
         if f'"{cron}") slot={slot}; profile={profile}' not in crawler_text:
             errors.append(f"crawler workflow lacks explicit mapping for {cron} -> {slot}/{profile}")
+
+    ai_digest_text = (
+        ROOT / ".github" / "workflows" / "ai-digest-daily.yml"
+    ).read_text(encoding="utf-8")
+    ai_digest_crons = set(re.findall(r'cron:\s*["\']([^"\']+)', ai_digest_text))
+    if ai_digest_crons != EXPECTED_AI_DIGEST_CRONS:
+        errors.append(
+            "AI Digest cron set differs from expected schedule: "
+            f"{sorted(ai_digest_crons)}"
+        )
 
     for workflow_name, secret_names in REQUIRED_WORKFLOW_SECRETS.items():
         workflow_path = ROOT / ".github" / "workflows" / workflow_name

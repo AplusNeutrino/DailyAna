@@ -6,6 +6,8 @@ import yaml
 
 from trendradar.core.loader import load_config
 
+ROOT = Path(__file__).parents[1]
+
 
 def write_yaml(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -37,3 +39,37 @@ def test_config_precedence_public_private_profile_env(monkeypatch):
     assert loaded["AI"]["MODEL"] == "environment-model"
     assert loaded["ENABLE_NOTIFICATION"] is True
     assert loaded["CONFIG_SOURCES"]["private"] == str(private.resolve())
+
+
+def test_work_and_relax_sources_are_disjoint():
+    categories = yaml.safe_load(
+        (ROOT / "config" / "content_categories.yaml").read_text(encoding="utf-8")
+    )["categories"]
+
+    def sources_for(profile_name: str, field: str) -> set[str]:
+        profile = yaml.safe_load(
+            (ROOT / "config" / "profiles" / f"{profile_name}.yaml").read_text(
+                encoding="utf-8"
+            )
+        )
+        selected = profile["content"]["selected_categories"]
+        return {
+            source_id
+            for category_id in selected
+            for source_id in categories[category_id].get(field, [])
+        }
+
+    work_platforms = sources_for("work", "platforms")
+    relax_platforms = sources_for("relax", "platforms")
+    work_rss = sources_for("work", "rss_feeds")
+    relax_rss = sources_for("relax", "rss_feeds")
+
+    assert work_platforms == {
+        "baidu", "thepaper", "wallstreetcn-hot", "cls-hot", "zhihu"
+    }
+    assert relax_platforms == {
+        "toutiao", "ifeng", "bilibili-hot-search", "tieba", "weibo", "douyin"
+    }
+    assert work_platforms.isdisjoint(relax_platforms)
+    assert work_rss == {"hacker-news", "yahoo-finance", "ruanyifeng"}
+    assert relax_rss == set()

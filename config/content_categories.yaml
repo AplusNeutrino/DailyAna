@@ -14,6 +14,7 @@ categories:
     rss_feeds:
       - hacker-news
       - yahoo-finance
+      - ruanyifeng
     keyword_groups:
       - DeepSeek
       - 华为
@@ -43,9 +44,7 @@ categories:
       - tieba
       - weibo
       - douyin
-      - zhihu
-    rss_feeds:
-      - ruanyifeng
+    rss_feeds: []
     keyword_groups:
       - 黑神话悟空
       - 影之刃零
@@ -53,20 +52,38 @@ categories:
       - 申奥
       - 胖东来
 
-  current_events:
-    name: 时事
-    description: 国内外公共事件、宏观动态与综合新闻
+  current_events_work:
+    name: 工作时事
+    description: 来自严肃新闻、财经与知识平台的公共事件和宏观动态
     platforms:
-      - toutiao
       - baidu
       - thepaper
-      - ifeng
       - wallstreetcn-hot
       - cls-hot
-      - weibo
       - zhihu
     rss_feeds:
       - yahoo-finance
+    keyword_groups:
+      - 中国
+      - 东亚
+      - 北美
+      - 西欧
+      - 俄罗斯
+      - 印度
+      - 京东
+      - 字节跳动
+      - 腾讯
+      - 胖东来
+
+  current_events_relax:
+    name: 休闲时事
+    description: 来自综合资讯与社交平台的公共事件和轻量热点
+    platforms:
+      - toutiao
+      - ifeng
+      - weibo
+      - douyin
+    rss_feeds: []
     keyword_groups:
       - 中国
       - 东亚

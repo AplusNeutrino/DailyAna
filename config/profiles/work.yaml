@@ -5,7 +5,7 @@
 content:
   selected_categories:
     - frontier
-    - current_events
+    - current_events_work
 
 notification:
   enabled: true
