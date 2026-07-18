@@ -23,7 +23,7 @@ from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 from xml.etree import ElementTree as ET
 
 import requests
@@ -35,6 +35,7 @@ from trendradar.core import load_config
 from trendradar.core.loader import resolve_config_resource
 from trendradar.intelligence import archive_external_run_to_r2, normalize_url
 from trendradar.notification.wework import send_wework_messages
+from trendradar.ranking import RankResult, ScoringContext, ranking_sort_key, score_record
 from trendradar.storage.base import RSSData, RSSItem
 
 FEED_ID = "ai-digest-daily"
@@ -834,6 +835,82 @@ def build_analysis_payload(topics: List[DigestTopic], date: str) -> Dict[str, An
     }
 
 
+def rank_ai_digest_topics(
+    config: Dict[str, Any],
+    topics: List[DigestTopic],
+    date: str,
+) -> tuple[List[DigestTopic], Dict[str, RankResult], Dict[str, Dict[str, Any]]]:
+    """Apply the deterministic A perspective; model output never affects order."""
+    intelligence = config.get("INTELLIGENCE_PUSH") or {}
+    rules = intelligence.get("rules") or {}
+    if not rules:
+        raise ValueError("AI Digest ranking requires intelligence_rules.yaml")
+    now = datetime.fromisoformat(f"{date}T10:00:00")
+    context = ScoringContext(
+        rules=rules,
+        now=now,
+        recent_records=dict(intelligence.get("recent_records", {}) or {}),
+        history_status=str(intelligence.get("ranking_history_status") or "ok"),
+    )
+    results: Dict[str, RankResult] = {}
+    records: Dict[str, Dict[str, Any]] = {}
+    for topic in topics:
+        domains = []
+        for url in topic.source_urls:
+            try:
+                domain = (urlsplit(url).hostname or "").lower().removeprefix("www.")
+            except ValueError:
+                domain = ""
+            if domain and domain not in domains:
+                domains.append(domain)
+        sources = [
+            {
+                "source": domain,
+                "source_id": domain,
+                "publisher_key": domain,
+                # Trust comes from the configured domain map.  Unknown linked
+                # domains must retain the neutral default instead of inheriting
+                # the professional-media tier merely because they have a URL.
+                "source_type": "external",
+                "url": next((url for url in topic.source_urls if domain in url), ""),
+            }
+            for domain in domains
+        ]
+        record = {
+            "id": topic.digest_id,
+            "title": topic.title,
+            "summary": " ".join(value for value in (topic.sentence, topic.significance) if value),
+            "category_id": "ai_models",
+            "category": "AI / 模型",
+            "tags": [],
+            "source": FEED_NAME,
+            "source_id": FEED_ID,
+            "source_type": "curated",
+            "source_count": max(1, len(domains)),
+            "sources": sources or [{
+                "source": FEED_NAME,
+                "source_id": FEED_ID,
+                "publisher_key": FEED_ID,
+                "source_type": "curated",
+                "url": topic.page_url,
+            }],
+            "url": normalize_url(topic.primary_url or topic.page_url),
+            "published_at": topic.published_at,
+            "captured_at": topic.published_at,
+            "last_seen": topic.published_at,
+            "occurrence_count": 1,
+            "platform_rank": 0,
+            "intent": ["WORK_CORE"],
+        }
+        result = score_record(record, "A", context)
+        record["raw_item_score"] = result.score
+        record["score_components"] = dict(result.components)
+        results[topic.digest_id] = result
+        records[topic.digest_id] = record
+    ordered = sorted(topics, key=lambda topic: ranking_sort_key(records[topic.digest_id]))
+    return ordered, results, records
+
+
 def parse_ai_json(response: str) -> Dict[str, Any]:
     text = (response or "").strip()
     if text.startswith("```"):
@@ -931,13 +1008,19 @@ def archive_ai_digest_projection(
     topics: List[DigestTopic],
     analysis: Dict[str, Any],
     date: str,
+    rankings: Optional[Dict[str, RankResult]] = None,
+    ranking_records: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> bool:
     item_analysis = analysis.get("items") or {}
     records = []
+    rankings = rankings or {}
+    ranking_records = ranking_records or {}
     for topic in topics:
         analysis_row = item_analysis.get(topic.digest_id, {})
         summary = analysis_row.get("summary") or topic.sentence or topic.significance
         first_seen = topic.published_at or f"{date}T00:00:00"
+        ranked = rankings.get(topic.digest_id)
+        ranking_record = ranking_records.get(topic.digest_id, {})
         records.append({
             "id": topic.digest_id,
             "short_id": f"D{topic.item_index:03d}",
@@ -945,11 +1028,11 @@ def archive_ai_digest_projection(
             "type": "ai_digest",
             "title": topic.title,
             "source": FEED_NAME,
-            "source_count": 1,
+            "source_count": max(1, int(ranking_record.get("source_count") or 1)),
             "url": normalize_url(topic.primary_url or topic.page_url),
             "category": "AI / 模型",
             "tags": list(analysis_row.get("tags") or [])[:10],
-            "score": int(analysis_row.get("score") or 0),
+            "score": int(ranked.score if ranked else 0),
             "first_seen": first_seen,
             "last_seen": first_seen,
             "occurrence_count": 1,
@@ -962,9 +1045,19 @@ def archive_ai_digest_projection(
         private_run={
             "topics": [topic.to_archive_dict() for topic in topics],
             "analysis": analysis,
+            "ranking": {
+                topic_id: result.to_private_dict()
+                for topic_id, result in rankings.items()
+            },
         },
         public_records=records,
         config=config.get("INTELLIGENCE_PUSH") or {},
+        perspective="A",
+        ranking=[
+            rankings[topic.digest_id].to_public_dict(topic.digest_id)
+            for topic in topics
+            if topic.digest_id in rankings
+        ],
     )
 
 
@@ -1042,8 +1135,18 @@ def main() -> int:
         analysis_snapshot = load_saved_analysis(storage, topics, target_date)
         storage_ok = storage.end_batch()
         batch_started = False
-        archive_ok = archive_ai_digest_projection(config, topics, analysis_snapshot, target_date)
-        notification_ok = send_wework_notification(topics, analysis_snapshot, target_date)
+        ranked_topics, rankings, ranking_records = rank_ai_digest_topics(
+            config, topics, target_date
+        )
+        archive_ok = archive_ai_digest_projection(
+            config,
+            ranked_topics,
+            analysis_snapshot,
+            target_date,
+            rankings,
+            ranking_records,
+        )
+        notification_ok = send_wework_notification(ranked_topics, analysis_snapshot, target_date)
 
         if args.json_snapshot:
             snapshot = write_json_snapshot(topics, digest_item, target_date)

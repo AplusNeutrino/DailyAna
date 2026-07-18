@@ -35,6 +35,10 @@ REQUIRED_WORKFLOW_SECRETS = {
         "S3_BUCKET_NAME", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY",
         "S3_ENDPOINT_URL", "NEUTRIVERSE_DISPATCH_TOKEN",
     },
+    "rescore-history-v3.yml": {
+        "RAVENIS_SECRETS_TOKEN", "S3_BUCKET_NAME", "S3_ACCESS_KEY_ID",
+        "S3_SECRET_ACCESS_KEY", "S3_ENDPOINT_URL", "NEUTRIVERSE_DISPATCH_TOKEN",
+    },
 }
 
 
@@ -266,27 +270,66 @@ def validate(args: argparse.Namespace) -> tuple[list[str], list[str]]:
     except Exception as exc:
         errors.append(f"content categories: {exc}")
 
-    rules_path = Path(private_dir) / "intelligence_rules.yaml" if private_dir else Path()
-    if not private_dir or not rules_path.exists():
-        rules_path = ROOT / "config" / "intelligence_rules.yaml"
     try:
-        rules = read_yaml(rules_path)
+        rules = read_yaml(ROOT / "config" / "intelligence_rules.yaml")
+        private_rules_path = Path(private_dir) / "intelligence_rules.yaml" if private_dir else Path()
+        if private_dir and private_rules_path.exists():
+            rules = deep_merge(rules, read_yaml(private_rules_path))
         category_rules = rules.get("categories") or []
         duplicates = duplicate_ids(category_rules)
         if duplicates:
             errors.append(f"duplicate intelligence category IDs: {', '.join(duplicates)}")
         category_ids = {item.get("id") for item in category_rules if isinstance(item, dict)}
-        relevance_ids = set(((rules.get("scoring") or {}).get("relevance") or {}))
-        dangling = sorted(relevance_ids - category_ids)
-        if dangling:
-            errors.append(f"scoring references unknown categories: {', '.join(dangling)}")
-        weights = ((rules.get("scoring") or {}).get("weights") or {})
-        required = {"relevance", "source_quality", "multi_source", "novelty", "impact"}
-        if set(weights) != required:
-            errors.append("scoring.weights must define exactly: " + ", ".join(sorted(required)))
-        total = sum(float(value) for value in weights.values())
-        if abs(total - 1.0) > 1e-9:
-            errors.append(f"scoring.weights must sum to 1.0 (got {total})")
+        scoring = rules.get("scoring") or {}
+        if int(scoring.get("version") or 0) != 2:
+            errors.append("scoring.version must be 2")
+        expected_slot_profiles = {"A": "A", "DIGEST": "A", "B": "B", "C": "C"}
+        if scoring.get("slot_profiles") != expected_slot_profiles:
+            errors.append("scoring.slot_profiles must map A/A, DIGEST/A, B/B and C/C")
+        required = {
+            "relevance", "source_quality", "evidence", "impact",
+            "novelty", "recency", "momentum", "actionability",
+        }
+        profiles = scoring.get("profiles") or {}
+        if set(profiles) != {"A", "B", "C"}:
+            errors.append("scoring.profiles must define exactly A, B and C")
+        for perspective in ("A", "B", "C"):
+            profile = profiles.get(perspective) or {}
+            weights = profile.get("weights") or {}
+            if set(weights) != required:
+                errors.append(
+                    f"scoring profile {perspective} must define exactly: "
+                    + ", ".join(sorted(required))
+                )
+            total = sum(float(value) for value in weights.values())
+            if abs(total - 1.0) > 1e-9:
+                errors.append(f"scoring profile {perspective} weights must sum to 1.0 (got {total})")
+            relevance_ids = set(profile.get("category_base") or {})
+            dangling = sorted(relevance_ids - category_ids)
+            if dangling:
+                errors.append(
+                    f"scoring profile {perspective} references unknown categories: "
+                    + ", ".join(dangling)
+                )
+            keywords = profile.get("keywords") or {}
+            normalized_groups = {
+                name: {str(value).strip().casefold() for value in keywords.get(name, []) or []}
+                for name in ("core", "secondary", "exclude")
+            }
+            for left, right in (("core", "exclude"), ("secondary", "exclude")):
+                overlap = sorted(normalized_groups[left] & normalized_groups[right])
+                if overlap:
+                    errors.append(
+                        f"scoring profile {perspective} has conflicting {left}/{right} keywords: "
+                        + ", ".join(overlap)
+                    )
+        source_scores = (rules.get("source_quality") or {}).get("sources") or {}
+        invalid_scores = sorted(
+            name for name, value in source_scores.items()
+            if not 0 <= float(value) <= 100
+        )
+        if invalid_scores:
+            errors.append("source quality scores must be within 0..100: " + ", ".join(invalid_scores))
         publisher_aliases = rules.get("publisher_aliases") or {}
         alias_owners: dict[str, str] = {}
         for canonical, aliases in publisher_aliases.items():

@@ -42,7 +42,8 @@ FORBIDDEN_FIELDS = {
     "playbook", "significance", "observation", "source_urls", "private_config",
 }
 ALLOWED_TYPES = {"news", "event_cluster", "ai_digest", "hotlist", "rss"}
-RUN_FIELDS = {"slot", "source", "generated_at", "record_ids", "summary"}
+RUN_FIELDS = {"slot", "perspective", "source", "generated_at", "record_ids", "ranking", "summary"}
+RANKING_FIELDS = {"id", "score", "reasons"}
 SUMMARY_FIELDS = {"status", "overview", "top_items", "watchlist"}
 TOP_ITEM_FIELDS = {"id", "headline", "event", "impact", "watch", "evidence_ids"}
 WATCH_ITEM_FIELDS = {"text", "evidence_ids"}
@@ -166,6 +167,13 @@ def filter_runs_to_records(
     for run in runs:
         clean = dict(run)
         clean["record_ids"] = [value for value in run.get("record_ids", []) if value in record_ids]
+        clean["ranking"] = [
+            item for item in run.get("ranking", []) or []
+            if item.get("id") in record_ids
+        ]
+        if clean["ranking"]:
+            ranked_ids = [item["id"] for item in clean["ranking"]]
+            clean["record_ids"] = ranked_ids
         if not clean["record_ids"]:
             continue
         summary = dict(run.get("summary") or {})
@@ -210,6 +218,11 @@ def validate_run(
     slot = _compact_text(run.get("slot") or slot_from_key, 24).upper()
     source = _compact_text(run.get("source") or source_from_key, 40)
     generated_at = _compact_text(run.get("generated_at"), 40)
+    perspective = _compact_text(run.get("perspective"), 1).upper()
+    if not perspective:
+        perspective = "A" if slot in {"A", "DIGEST"} else slot if slot in {"B", "C"} else ""
+    if perspective and perspective not in {"A", "B", "C"}:
+        raise ValueError(f"public run has an invalid perspective in {key}")
     run_record_ids = [
         _compact_text(value, 80)
         for value in run.get("record_ids", []) or []
@@ -217,6 +230,28 @@ def validate_run(
     ]
     if not run_record_ids:
         run_record_ids = sorted(record_ids)
+    ranking = []
+    seen_ranking_ids: set[str] = set()
+    for raw_item in run.get("ranking", []) or []:
+        if not isinstance(raw_item, dict) or set(raw_item) - RANKING_FIELDS:
+            raise ValueError(f"public run ranking has an invalid shape in {key}")
+        item_id = _compact_text(raw_item.get("id"), 80)
+        if item_id not in record_ids or item_id in seen_ranking_ids:
+            continue
+        reasons = [
+            _compact_text(value, 80)
+            for value in raw_item.get("reasons", []) or []
+            if _compact_text(value, 80)
+        ][:2]
+        ranking.append({
+            "id": item_id,
+            "score": max(0, min(100, int(raw_item.get("score") or 0))),
+            "reasons": reasons,
+        })
+        seen_ranking_ids.add(item_id)
+    if ranking:
+        ranked_ids = [item["id"] for item in ranking]
+        run_record_ids = ranked_ids
     raw_summary = run.get("summary") or {}
     if not isinstance(raw_summary, dict) or set(raw_summary) - SUMMARY_FIELDS:
         raise ValueError(f"public digest summary has an invalid shape in {key}")
@@ -256,9 +291,11 @@ def validate_run(
     return {
         "date": date,
         "slot": slot,
+        "perspective": perspective,
         "source": source,
         "generated_at": generated_at,
         "record_ids": list(dict.fromkeys(run_record_ids)),
+        "ranking": ranking,
         "summary": {
             "status": status,
             "overview": _compact_text(raw_summary.get("overview"), 80),
@@ -309,19 +346,35 @@ def merge_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def build_search_index(records: list[dict[str, Any]], runs: list[dict[str, Any]]) -> dict[str, Any]:
     """Build the lazy-loaded 30-day browser index from public fields only."""
     slots_by_id: dict[str, set[str]] = {}
+    perspectives_by_id: dict[str, dict[str, dict[str, Any]]] = {}
     for run in runs:
         slot = _compact_text(run.get("slot"), 24).upper()
         if not slot:
             continue
         for record_id in run.get("record_ids", []) or []:
             slots_by_id.setdefault(str(record_id), set()).add(slot)
+        perspective = _compact_text(run.get("perspective"), 1).upper()
+        if perspective not in {"A", "B", "C"}:
+            perspective = "A" if slot in {"A", "DIGEST"} else slot if slot in {"B", "C"} else ""
+        for ranking in run.get("ranking", []) or []:
+            record_id = str(ranking.get("id") or "")
+            if not record_id or not perspective:
+                continue
+            candidate = {
+                "score": max(0, min(100, int(ranking.get("score") or 0))),
+                "reasons": [_compact_text(value, 80) for value in ranking.get("reasons", []) or []][:2],
+            }
+            current = perspectives_by_id.setdefault(record_id, {}).get(perspective)
+            if current is None or candidate["score"] > current["score"]:
+                perspectives_by_id[record_id][perspective] = candidate
     items = []
     for record in records:
         item = {field: record.get(field) for field in sorted(PUBLIC_FIELDS)}
         item["slots"] = sorted(slots_by_id.get(record["id"], set()))
+        item["perspectives"] = perspectives_by_id.get(record["id"], {})
         items.append(item)
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "generated_at": utc_now().isoformat(timespec="seconds"),
         "total": len(items),
         "items": items,
@@ -465,7 +518,7 @@ def write_site(
         )
         search_sha256 = hashlib.sha256(search_path.read_bytes()).hexdigest()
         manifest = {
-            "schema_version": 2,
+            "schema_version": 3,
             "generated_at": generated_at,
             "retention_days": retention_days,
             "total": len(records),

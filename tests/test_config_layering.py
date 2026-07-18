@@ -30,6 +30,17 @@ def test_config_precedence_public_private_profile_env(monkeypatch):
         },
     )
     write_yaml(private, {"ai": {"model": "private-model"}})
+    write_yaml(
+        public.parent / "intelligence_rules.yaml",
+        {
+            "scoring": {"version": 2, "profiles": {"A": {"weights": {"relevance": 0.26}}}},
+            "source_quality": {"default": 60, "sources": {"public": 80}},
+        },
+    )
+    write_yaml(
+        private_dir / "intelligence_rules.yaml",
+        {"source_quality": {"sources": {"private": 95}}},
+    )
     write_yaml(private_dir / "profiles" / "work.yaml", {"notification": {"enabled": True}})
     monkeypatch.setenv("RAVENIS_PRIVATE_CONFIG", str(private.resolve()))
     monkeypatch.setenv("RAVENIS_PRIVATE_CONFIG_DIR", str(private_dir.resolve()))
@@ -39,6 +50,9 @@ def test_config_precedence_public_private_profile_env(monkeypatch):
     assert loaded["AI"]["MODEL"] == "environment-model"
     assert loaded["ENABLE_NOTIFICATION"] is True
     assert loaded["CONFIG_SOURCES"]["private"] == str(private.resolve())
+    rules = loaded["INTELLIGENCE_PUSH"]["rules"]
+    assert rules["scoring"]["profiles"]["A"]["weights"]["relevance"] == 0.26
+    assert rules["source_quality"]["sources"] == {"public": 80, "private": 95}
 
 
 def test_scheduled_profile_sources_are_disjoint():

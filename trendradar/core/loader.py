@@ -98,6 +98,19 @@ def resolve_config_resource(relative_path: str, config_path: Optional[str] = Non
     return _config_search_dirs(config_path)[-1] / requested
 
 
+def _load_merged_resource(relative_path: str, config_path: Optional[str] = None) -> tuple[Dict[str, Any], list[Path]]:
+    """Merge a public YAML resource with optional private overrides."""
+    merged: Dict[str, Any] = {}
+    loaded: list[Path] = []
+    for directory in reversed(_config_search_dirs(config_path)):
+        candidate = directory / relative_path
+        if not candidate.exists() or candidate in loaded:
+            continue
+        merged = _deep_merge_config(merged, _read_yaml_mapping(candidate))
+        loaded.append(candidate)
+    return merged, loaded
+
+
 def _read_yaml_mapping(path: Path) -> Dict[str, Any]:
     with path.open("r", encoding="utf-8") as file:
         data = yaml.safe_load(file) or {}
@@ -757,10 +770,12 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
     if profile_override:
         config_data = _deep_merge_config(config_data, profile_override)
     config_data = _apply_content_category_filter(config_data, config_path)
-    rules_path = resolve_config_resource("intelligence_rules.yaml", config_path)
-    if rules_path.exists():
-        config_data["intelligence_rules"] = _read_yaml_mapping(rules_path)
-        print(f"[config] Loaded intelligence rules: {rules_path}")
+    intelligence_rules, rules_paths = _load_merged_resource(
+        "intelligence_rules.yaml", config_path
+    )
+    if intelligence_rules:
+        config_data["intelligence_rules"] = intelligence_rules
+        print("[config] Loaded intelligence rules: " + " -> ".join(str(path) for path in rules_paths))
 
     # 合并所有配置
     config = {
