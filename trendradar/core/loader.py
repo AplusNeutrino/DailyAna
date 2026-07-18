@@ -429,6 +429,9 @@ def _load_display_config(config_data: Dict) -> Dict:
             "PLATFORMS": standalone.get("platforms", []),
             "RSS_FEEDS": standalone.get("rss_feeds", []),
             "MAX_ITEMS": standalone.get("max_items", 20),
+            "INCLUDE_ALL_ACTIVE_SOURCES": standalone.get(
+                "include_all_active_sources", False
+            ),
         },
     }
 

@@ -140,6 +140,11 @@ def validate(args: argparse.Namespace) -> tuple[list[str], list[str]]:
 
     rss_config = config.get("rss") or {}
     rss_feeds = rss_config.get("feeds") or []
+    standalone_config = (config.get("display") or {}).get("standalone") or {}
+    if rss_feeds and not standalone_config.get("include_all_active_sources", False):
+        errors.append(
+            "display.standalone.include_all_active_sources must be true when RSS feeds are configured"
+        )
     rsshub_base_url = str(rss_config.get("rsshub_base_url") or "").strip()
     if rsshub_base_url and not re.fullmatch(r"https?://\S+", rsshub_base_url):
         errors.append("rss.rsshub_base_url must be an HTTP(S) URL")
