@@ -45,6 +45,7 @@ jobs:
       - name: Runtime configuration and workflow mapping
         run: |
           uv run python tools/validate_runtime.py --profile work --slot A
+          uv run python tools/validate_runtime.py --profile general --slot B
           uv run python tools/validate_runtime.py --profile relax --slot C
           uv run python - <<'PY'
           from pathlib import Path

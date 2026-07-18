@@ -95,7 +95,7 @@ slots:
     time: '06:00'
   B:
     label: 午间
-    time: '14:15'
+    time: '14:05'
   C:
     label: 晚间
     time: '17:10'

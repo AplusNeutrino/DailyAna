@@ -359,14 +359,35 @@ def _load_rss_config(config_data: Dict) -> Dict:
         print(f"[警告] RSS freshness_filter.max_age_days 格式错误 ({raw_max_age})，使用默认值 3")
         max_age_days = 3
 
-    # RSS 配置直接从 config.yaml 读取，不再支持环境变量
+    feeds = deepcopy(rss.get("feeds", []))
+    rsshub_base_url = (
+        os.environ.get("RSSHUB_BASE_URL", "").strip()
+        or str(rss.get("rsshub_base_url", "")).strip()
+    ).rstrip("/")
+    if rsshub_base_url and not rsshub_base_url.startswith(("http://", "https://")):
+        print("[警告] RSSHUB_BASE_URL 必须使用 http:// 或 https://，忽略该配置")
+        rsshub_base_url = ""
+    if rsshub_base_url:
+        replaced = 0
+        for feed in feeds:
+            if not isinstance(feed, dict):
+                continue
+            url = str(feed.get("url", ""))
+            for official_base in ("https://rsshub.app", "http://rsshub.app"):
+                if url == official_base or url.startswith(official_base + "/"):
+                    feed["url"] = rsshub_base_url + url[len(official_base) :]
+                    replaced += 1
+                    break
+        if replaced:
+            print(f"[RSS] 使用自定义 RSSHub 实例，已重写 {replaced} 个订阅地址")
+
     return {
         "ENABLED": rss.get("enabled", False),
         "REQUEST_INTERVAL": advanced_rss.get("request_interval", 2000),
         "TIMEOUT": advanced_rss.get("timeout", 15),
         "USE_PROXY": advanced_rss.get("use_proxy", False),
         "PROXY_URL": rss_proxy_url,
-        "FEEDS": rss.get("feeds", []),
+        "FEEDS": feeds,
         "FRESHNESS_FILTER": {
             "ENABLED": freshness_filter.get("enabled", True),  # 默认启用
             "MAX_AGE_DAYS": max_age_days,

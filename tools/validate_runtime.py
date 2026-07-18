@@ -16,10 +16,12 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_CRONS = {
     "0 22 * * *": ("A", "work"),
+    "5 6 * * *": ("B", "general"),
     "10 9 * * *": ("C", "relax"),
 }
-EXPECTED_AI_DIGEST_CRONS = {"5 6 * * *"}
-EXPECTED_SLOT_TIMES = {"A": "06:00", "C": "17:10"}
+EXPECTED_AI_DIGEST_CRONS = {"0 2 * * *"}
+EXPECTED_SLOT_TIMES = {"A": "06:00", "B": "14:05", "C": "17:10"}
+SCHEDULED_PROFILES = ("work", "general", "relax")
 REQUIRED_PRODUCTION_ENV = (
     "WEWORK_WEBHOOK_URL",
     "WEWORK_MSG_TYPE",
@@ -136,6 +138,40 @@ def validate(args: argparse.Namespace) -> tuple[list[str], list[str]]:
         if duplicates:
             errors.append(f"duplicate {label} IDs: {', '.join(duplicates)}")
 
+    rss_config = config.get("rss") or {}
+    rss_feeds = rss_config.get("feeds") or []
+    rsshub_base_url = str(rss_config.get("rsshub_base_url") or "").strip()
+    if rsshub_base_url and not re.fullmatch(r"https?://\S+", rsshub_base_url):
+        errors.append("rss.rsshub_base_url must be an HTTP(S) URL")
+    expected_feed_count = rss_config.get("expected_feed_count")
+    if expected_feed_count is not None:
+        try:
+            expected_feed_count = int(expected_feed_count)
+        except (TypeError, ValueError):
+            errors.append("rss.expected_feed_count must be an integer")
+        else:
+            if len(rss_feeds) != expected_feed_count:
+                errors.append(
+                    "RSS feed count differs from configured inventory: "
+                    f"expected {expected_feed_count}, got {len(rss_feeds)}"
+                )
+
+    rss_urls: dict[str, str] = {}
+    for feed in rss_feeds:
+        if not isinstance(feed, dict):
+            continue
+        feed_id = str(feed.get("id") or "")
+        url = str(feed.get("url") or "").strip()
+        if not re.fullmatch(r"https?://\S+", url):
+            errors.append(f"RSS feed {feed_id or '<missing>'} has invalid HTTP(S) URL")
+            continue
+        normalized_url = url.rstrip("/").lower()
+        previous = rss_urls.get(normalized_url)
+        if previous and previous != feed_id:
+            errors.append(f"duplicate RSS URL shared by {previous} and {feed_id}")
+        else:
+            rss_urls[normalized_url] = feed_id
+
     categories_path = Path(private_dir) / "content_categories.yaml" if private_dir else Path()
     if not private_dir or not categories_path.exists():
         categories_path = ROOT / "config" / "content_categories.yaml"
@@ -146,8 +182,34 @@ def validate(args: argparse.Namespace) -> tuple[list[str], list[str]]:
         if dangling:
             errors.append(f"unknown selected content categories: {', '.join(dangling)}")
 
+        known_sources = {
+            "platforms": {
+                str(item.get("id"))
+                for item in (config.get("platforms") or {}).get("sources") or []
+                if isinstance(item, dict) and item.get("id")
+            },
+            "rss_feeds": {
+                str(item.get("id"))
+                for item in rss_feeds
+                if isinstance(item, dict) and item.get("id")
+            },
+        }
+        for field, label in (("platforms", "platform"), ("rss_feeds", "RSS")):
+            referenced = {
+                str(source_id)
+                for category in category_map.values()
+                if isinstance(category, dict)
+                for source_id in category.get(field, []) or []
+            }
+            unknown = sorted(referenced - known_sources[field])
+            if unknown:
+                errors.append(
+                    f"content categories reference unknown {label} sources: "
+                    + ", ".join(unknown)
+                )
+
         profile_sources: dict[str, dict[str, set[str]]] = {}
-        for profile_name in ("work", "relax"):
+        for profile_name in SCHEDULED_PROFILES:
             candidate = next(
                 (
                     directory / f"{profile_name}.yaml"
@@ -177,14 +239,24 @@ def validate(args: argparse.Namespace) -> tuple[list[str], list[str]]:
                 for field in ("platforms", "rss_feeds")
             }
 
-        if set(profile_sources) == {"work", "relax"}:
+        if set(profile_sources) == set(SCHEDULED_PROFILES):
             for field, label in (("platforms", "platform"), ("rss_feeds", "RSS")):
-                overlap = sorted(
-                    profile_sources["work"][field] & profile_sources["relax"][field]
-                )
-                if overlap:
+                owners: dict[str, str] = {}
+                for profile_name in SCHEDULED_PROFILES:
+                    for source_id in profile_sources[profile_name][field]:
+                        previous = owners.get(source_id)
+                        if previous:
+                            errors.append(
+                                f"{label} source {source_id} overlaps profiles "
+                                f"{previous} and {profile_name}"
+                            )
+                        else:
+                            owners[source_id] = profile_name
+                unassigned = sorted(known_sources[field] - set(owners))
+                if unassigned:
                     errors.append(
-                        f"work/relax {label} sources overlap: {', '.join(overlap)}"
+                        f"configured {label} sources are not assigned to a profile: "
+                        + ", ".join(unassigned)
                     )
     except Exception as exc:
         errors.append(f"content categories: {exc}")
@@ -281,7 +353,7 @@ def validate(args: argparse.Namespace) -> tuple[list[str], list[str]]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--profile", choices=("work", "relax"), default="work")
+    parser.add_argument("--profile", choices=SCHEDULED_PROFILES, default="work")
     parser.add_argument("--slot", choices=("A", "B", "C"), default="A")
     parser.add_argument("--check-env", action="store_true")
     args = parser.parse_args()
