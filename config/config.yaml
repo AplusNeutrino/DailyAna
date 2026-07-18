@@ -83,6 +83,7 @@ display:
     - wallstreetcn-hot
     rss_feeds: []
     max_items: 20
+    include_all_active_sources: true
 source_digest:
   enabled: false
   max_items: 30

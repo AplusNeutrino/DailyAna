@@ -690,9 +690,23 @@ class NewsAnalyzer:
         display_config = self.ctx.config.get("DISPLAY", {})
         standalone_config = display_config.get("STANDALONE", {})
 
-        platform_ids = standalone_config.get("PLATFORMS", [])
-        rss_feed_ids = standalone_config.get("RSS_FEEDS", [])
+        platform_ids = list(standalone_config.get("PLATFORMS", []))
+        rss_feed_ids = list(standalone_config.get("RSS_FEEDS", []))
         max_items = standalone_config.get("MAX_ITEMS", 20)
+
+        if standalone_config.get("INCLUDE_ALL_ACTIVE_SOURCES", False):
+            platform_ids = list(dict.fromkeys([
+                *platform_ids,
+                *self.ctx.platform_ids,
+            ]))
+            rss_feed_ids = list(dict.fromkeys([
+                *rss_feed_ids,
+                *(
+                    str(feed.get("id"))
+                    for feed in self.ctx.rss_feeds
+                    if isinstance(feed, dict) and feed.get("id")
+                ),
+            ]))
 
         if not platform_ids and not rss_feed_ids:
             return None
@@ -790,6 +804,7 @@ class NewsAnalyzer:
                         "url": item.get("url", ""),
                         "published_at": item.get("published_at", ""),
                         "author": item.get("author", ""),
+                        "summary": item.get("summary", ""),
                     })
 
             # 限制条数并添加到结果
@@ -962,7 +977,13 @@ class NewsAnalyzer:
         # 检查是否有有效内容（热榜或RSS）
         has_news_content = self._has_valid_content(stats, new_titles)
         has_rss_content = bool(rss_items and len(rss_items) > 0)
-        has_any_content = has_news_content or has_rss_content
+        standalone_count = sum(
+            len(group.get("items", []) or [])
+            for section in ("platforms", "rss_feeds")
+            for group in (standalone_data or {}).get(section, []) or []
+        )
+        has_standalone_content = standalone_count > 0
+        has_any_content = has_news_content or has_rss_content or has_standalone_content
 
         # 计算热榜匹配条数
         news_count = sum(len(stat.get("titles", [])) for stat in stats) if stats else 0
@@ -979,7 +1000,9 @@ class NewsAnalyzer:
                 content_parts.append(f"热榜 {news_count} 条")
             if rss_count > 0:
                 content_parts.append(f"RSS {rss_count} 条")
-            total_count = news_count + rss_count
+            if standalone_count > 0:
+                content_parts.append(f"原始源 {standalone_count} 条")
+            total_count = news_count + rss_count + standalone_count
             print(f"[推送] 准备发送：{' + '.join(content_parts)}，合计 {total_count} 条")
 
             # 调度系统决策
@@ -1790,7 +1813,7 @@ class NewsAnalyzer:
 
         except Exception as e:
             print(f"分析流程执行出错: {e}")
-            if self.ctx.config.get("DEBUG", False):
+            if self.is_github_actions or self.ctx.config.get("DEBUG", False):
                 raise
         finally:
             # 清理资源（包括过期数据清理和数据库连接关闭）
