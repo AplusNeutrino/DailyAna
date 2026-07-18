@@ -1,0 +1,84 @@
+name: Ravenis Core - Rescore History v3
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Write verified v3 projections after the dry-run report"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ravenis-history-rescore
+  cancel-in-progress: false
+
+jobs:
+  rescore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Install locked dependencies
+        run: uv sync --frozen --no-dev
+
+      - name: Checkout private scoring overrides
+        uses: actions/checkout@v6
+        with:
+          repository: AplusNeutrino/Ravenis-Secrets
+          token: ${{ secrets.RAVENIS_SECRETS_TOKEN }}
+          path: .ravenis-secrets
+
+      - name: Recalculate recent private runs
+        env:
+          RAVENIS_PRIVATE_CONFIG_DIR: ${{ github.workspace }}/.ravenis-secrets/config
+          S3_BUCKET_NAME: ${{ secrets.S3_BUCKET_NAME }}
+          S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+          S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+          S3_ENDPOINT_URL: ${{ secrets.S3_ENDPOINT_URL }}
+          S3_REGION: ${{ secrets.S3_REGION }}
+          APPLY_CHANGES: ${{ inputs.apply }}
+        shell: bash
+        run: |
+          args=(--retention-days 30 --max-runs 500)
+          if [[ "$APPLY_CHANGES" == "true" ]]; then args+=(--apply); fi
+          uv run python tools/rescore_history_v3.py "${args[@]}"
+
+      - name: Build verified history release
+        if: inputs.apply
+        env:
+          S3_BUCKET_NAME: ${{ secrets.S3_BUCKET_NAME }}
+          S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+          S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+          S3_ENDPOINT_URL: ${{ secrets.S3_ENDPOINT_URL }}
+          S3_REGION: ${{ secrets.S3_REGION }}
+        run: >-
+          uv run python tools/build_history_index.py
+          --retention-days 30
+          --output-dir docs/history
+          --upload-key history/manifest.json
+          --release-prefix history/releases
+          --pointer-key history/current.json
+
+      - name: Trigger Neutriverse deployment
+        if: inputs.apply
+        env:
+          GH_TOKEN: ${{ secrets.NEUTRIVERSE_DISPATCH_TOKEN }}
+        run: >-
+          gh api repos/AplusNeutrino/My_Blog/dispatches
+          --method POST
+          -f event_type=ravenis-history-published
+          -f client_payload[producer_run_id]=${{ github.run_id }}

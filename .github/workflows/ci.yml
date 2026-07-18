@@ -39,6 +39,7 @@ jobs:
           trendradar/storage/remote.py
           tools/build_history_index.py
           tools/migrate_legacy_history.py
+          tools/rescore_history_v3.py
           tools/fetch_ai_digest_daily.py
           tools/validate_runtime.py
           tests

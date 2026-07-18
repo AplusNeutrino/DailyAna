@@ -19,6 +19,13 @@ from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+from trendradar.ranking import (
+    ScoringContext,
+    perspective_for_slot,
+    ranking_sort_key,
+    score_record,
+)
+
 try:
     import boto3
     from botocore.config import Config as BotoConfig
@@ -308,6 +315,9 @@ def _collect_raw_candidates(report_data: Dict[str, Any], rss_items: Optional[Lis
             "source_type": "hotlist",
             "platform_rank": title.get("rank") or title.get("current_rank") or 0,
             "captured_at": title.get("crawl_time") or title.get("last_time") or "",
+            "first_seen": title.get("first_seen") or title.get("first_time") or title.get("published_at") or title.get("crawl_time") or "",
+            "last_seen": title.get("last_seen") or title.get("last_time") or title.get("crawl_time") or "",
+            "occurrence_count": title.get("occurrence_count") or title.get("count") or 1,
             "summary": title.get("summary") or "",
             "raw_payload": title,
         })
@@ -321,6 +331,9 @@ def _collect_raw_candidates(report_data: Dict[str, Any], rss_items: Optional[Lis
             "source_type": "hotlist",
             "platform_rank": title.get("rank") or 0,
             "captured_at": title.get("crawl_time") or title.get("last_time") or "",
+            "first_seen": title.get("first_seen") or title.get("first_time") or title.get("published_at") or title.get("crawl_time") or "",
+            "last_seen": title.get("last_seen") or title.get("last_time") or title.get("crawl_time") or "",
+            "occurrence_count": title.get("occurrence_count") or title.get("count") or 1,
             "summary": title.get("summary") or "",
             "raw_payload": title,
         })
@@ -334,6 +347,9 @@ def _collect_raw_candidates(report_data: Dict[str, Any], rss_items: Optional[Lis
             "source_type": "rss",
             "platform_rank": title.get("rank") or 0,
             "captured_at": title.get("published_at") or title.get("crawl_time") or "",
+            "first_seen": title.get("first_seen") or title.get("first_time") or title.get("published_at") or title.get("crawl_time") or "",
+            "last_seen": title.get("last_seen") or title.get("last_time") or title.get("published_at") or title.get("crawl_time") or "",
+            "occurrence_count": title.get("occurrence_count") or title.get("count") or 1,
             "summary": title.get("summary") or "",
             "raw_payload": title,
         })
@@ -347,6 +363,9 @@ def _collect_raw_candidates(report_data: Dict[str, Any], rss_items: Optional[Lis
             "source_type": "rss",
             "platform_rank": title.get("rank") or 0,
             "captured_at": title.get("published_at") or title.get("crawl_time") or "",
+            "first_seen": title.get("first_seen") or title.get("first_time") or title.get("published_at") or title.get("crawl_time") or "",
+            "last_seen": title.get("last_seen") or title.get("last_time") or title.get("published_at") or title.get("crawl_time") or "",
+            "occurrence_count": title.get("occurrence_count") or title.get("count") or 1,
             "summary": title.get("summary") or "",
             "raw_payload": title,
         })
@@ -360,6 +379,9 @@ def _collect_raw_candidates(report_data: Dict[str, Any], rss_items: Optional[Lis
             "source_type": source_type,
             "platform_rank": item.get("rank") or 0,
             "captured_at": item.get("published_at") or item.get("crawl_time") or item.get("last_time") or "",
+            "first_seen": item.get("first_seen") or item.get("first_time") or item.get("published_at") or item.get("crawl_time") or "",
+            "last_seen": item.get("last_seen") or item.get("last_time") or item.get("crawl_time") or item.get("published_at") or "",
+            "occurrence_count": item.get("occurrence_count") or item.get("count") or 1,
             "summary": item.get("summary") or "",
             "raw_payload": item,
         })
@@ -398,11 +420,13 @@ def _dedupe_candidates(
             }
             if source_entry["publisher_key"] not in source_keys:
                 existing["sources"].append(source_entry)
-            existing["occurrence_count"] += 1
-            captured_at = _text(item.get("captured_at"))
-            if captured_at:
-                existing["first_seen"] = min(existing["first_seen"], captured_at) if existing["first_seen"] else captured_at
-                existing["last_seen"] = max(existing["last_seen"], captured_at) if existing["last_seen"] else captured_at
+            existing["occurrence_count"] += max(1, int(item.get("occurrence_count") or 1))
+            first_seen = _text(item.get("first_seen") or item.get("captured_at"))
+            last_seen = _text(item.get("last_seen") or item.get("captured_at"))
+            if first_seen:
+                existing["first_seen"] = min(existing["first_seen"], first_seen) if existing["first_seen"] else first_seen
+            if last_seen:
+                existing["last_seen"] = max(existing["last_seen"], last_seen) if existing["last_seen"] else last_seen
             existing.setdefault("duplicate_sources", []).append({
                 "source": item.get("source", ""),
                 "source_id": item.get("source_id", ""),
@@ -415,9 +439,9 @@ def _dedupe_candidates(
             continue
         item["url"] = url_key or _text(item.get("url"))
         item["sources"] = [source_entry]
-        item["occurrence_count"] = 1
-        item["first_seen"] = _text(item.get("captured_at"))
-        item["last_seen"] = _text(item.get("captured_at"))
+        item["occurrence_count"] = max(1, int(item.get("occurrence_count") or 1))
+        item["first_seen"] = _text(item.get("first_seen") or item.get("captured_at"))
+        item["last_seen"] = _text(item.get("last_seen") or item.get("captured_at"))
         for key in keys:
             seen[key] = item
         ordered.append(item)
@@ -586,8 +610,17 @@ def build_intelligence_package(
     date_text = now.date().isoformat()
     date_compact = now.strftime("%Y%m%d")
     slot = get_slot(now, cfg.get("slots"))
+    perspective = perspective_for_slot(slot, rules)
     thresholds = (cfg.get("scoring") or {}).get("thresholds") or {"altar": 80, "brief": 60, "list": 30}
-    recent_ids = set(cfg.get("recent_content_ids", []) or [])
+    recent_records = dict(cfg.get("recent_records", {}) or {})
+    for recent_id in cfg.get("recent_content_ids", []) or []:
+        recent_records.setdefault(_text(recent_id), {"id": _text(recent_id)})
+    scoring_context = ScoringContext(
+        rules=rules,
+        now=now,
+        recent_records=recent_records,
+        history_status=_text(cfg.get("ranking_history_status")) or "ok",
+    )
 
     candidates = _collect_raw_candidates(
         report_data, rss_items, rss_new_items, standalone_data
@@ -632,8 +665,15 @@ def build_intelligence_package(
             "duplicate_sources": candidate.get("duplicate_sources", []),
             "raw_payload": candidate.get("raw_payload", {}),
         }
-        item["raw_item_score"] = _score_item(item, rules, recent_ids)
+        ranking = score_record(item, perspective, scoring_context)
+        item["raw_item_score"] = ranking.score
+        item["score_components"] = dict(ranking.components)
+        item["rank_reasons"] = list(ranking.reasons)
+        item["rank_penalties"] = list(ranking.penalties)
+        item["rank_perspective"] = ranking.perspective
         raw_items.append(item)
+
+    raw_items.sort(key=ranking_sort_key)
 
     clusters = _build_clusters(raw_items, date_text, slot, now, thresholds, rules)
     category_order = [
@@ -645,10 +685,12 @@ def build_intelligence_package(
         "date": date_text,
         "date_compact": date_compact,
         "slot": slot,
+        "perspective": perspective,
         "generated_at": now.isoformat(timespec="seconds"),
         "thresholds": thresholds,
         "category_order": category_order,
-        "run_status": "ok",
+        "run_status": "degraded" if scoring_context.history_status == "degraded" else "ok",
+        "ranking_status": scoring_context.history_status,
         "candidate_count": len(candidates),
         "deduplicated_count": len(raw_candidates),
         "raw_items": raw_items,
@@ -664,16 +706,7 @@ def _clip(text: str, limit: int = 88) -> str:
 def select_digest_candidates(package: Dict[str, Any], max_candidates: int = 12) -> List[Dict[str, Any]]:
     """Select the bounded, rule-ranked evidence set shown to the summary model."""
     limit = max(1, min(int(max_candidates or 12), 12))
-    return sorted(
-        package.get("raw_items", []) or [],
-        key=lambda item: (
-            int(item.get("raw_item_score") or 0),
-            int(item.get("source_count") or 1),
-            int(item.get("occurrence_count") or 1),
-            _text(item.get("last_seen")),
-        ),
-        reverse=True,
-    )[:limit]
+    return sorted(package.get("raw_items", []) or [], key=ranking_sort_key)[:limit]
 
 
 def _select_top_items(candidates: List[Dict[str, Any]], limit: int) -> List[Dict[str, Any]]:
@@ -1462,15 +1495,74 @@ def build_public_projection(package: Dict[str, Any]) -> Dict[str, Any]:
             "summary": _public_summary(cluster.get("summary", "")),
         })
     allowed_ids = {record["id"] for record in records if record.get("id")}
+    item_by_id = {
+        _text(item.get("id")): item
+        for item in package.get("raw_items", []) or []
+        if _text(item.get("id"))
+    }
+    cluster_by_id = {
+        _text(cluster.get("cluster_id")): cluster
+        for cluster in package.get("clusters", []) or []
+        if _text(cluster.get("cluster_id"))
+    }
+    ranking_rows = []
+    for record in records:
+        record_id = _text(record.get("id"))
+        item = item_by_id.get(record_id)
+        if item is not None:
+            reasons = [_text(value)[:80] for value in item.get("rank_reasons", []) if _text(value)][:2]
+            components = item.get("score_components") or {}
+            source_quality = int(components.get("source_quality") or 0)
+            evidence = int(components.get("evidence") or 0)
+        else:
+            cluster = cluster_by_id.get(record_id, {})
+            members = [item_by_id.get(_text(value), {}) for value in cluster.get("related_item_ids", []) or []]
+            source_quality = max(
+                (int((member.get("score_components") or {}).get("source_quality") or 0) for member in members),
+                default=0,
+            )
+            source_count = int(cluster.get("source_count") or 0)
+            evidence = 35 if source_count <= 1 else 70 if source_count == 2 else 85 if source_count == 3 else 100
+            reasons = [
+                f"{source_count} 个独立来源交叉印证",
+                f"{_text(package.get('perspective'))} 高权重事件簇",
+            ]
+        try:
+            last_seen_order = datetime.fromisoformat(
+                _text(record.get("last_seen")).replace("Z", "+00:00")
+            ).timestamp()
+        except (TypeError, ValueError):
+            last_seen_order = 0.0
+        ranking_rows.append({
+            "id": record_id,
+            "score": int(record.get("score") or 0),
+            "reasons": reasons,
+            "source_quality": source_quality,
+            "evidence": evidence,
+            "last_seen_order": last_seen_order,
+        })
+    ranking_rows.sort(key=lambda value: (
+        -value["score"],
+        -value["source_quality"],
+        -value["evidence"],
+        -value["last_seen_order"],
+        value["id"],
+    ))
+    ranking = [
+        {"id": item["id"], "score": item["score"], "reasons": item["reasons"]}
+        for item in ranking_rows
+    ]
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "date": package.get("date", ""),
         "generated_at": package.get("generated_at", ""),
         "run": {
             "slot": _text(package.get("slot")),
+            "perspective": _text(package.get("perspective")),
             "source": "ravenis",
             "generated_at": _text(package.get("generated_at")),
-            "record_ids": sorted(allowed_ids),
+            "record_ids": [item["id"] for item in ranking if item["id"] in allowed_ids],
+            "ranking": [item for item in ranking if item["id"] in allowed_ids],
             "summary": _public_digest_summary(package.get("digest_summary"), allowed_ids),
         },
         "records": records,
@@ -1485,6 +1577,8 @@ def archive_external_run_to_r2(
     private_run: Dict[str, Any],
     public_records: List[Dict[str, Any]],
     config: Dict[str, Any],
+    perspective: str = "A",
+    ranking: Optional[List[Dict[str, Any]]] = None,
 ) -> bool:
     """Archive one non-crawler producer using the same run/projection contract."""
     client, bucket = _s3_client_from_config(config)
@@ -1500,17 +1594,26 @@ def archive_external_run_to_r2(
     run_id = f"{date.replace('-', '')}-{slot}-{run_number or 'local'}"
     run_payload = dict(private_run)
     run_payload.update({"run_id": run_id, "date": date, "slot": slot, "source": source})
+    ranking = list(ranking or [
+        {
+            "id": _text(record.get("id")),
+            "score": int(record.get("score") or 0),
+            "reasons": [],
+        }
+        for record in public_records
+        if _text(record.get("id"))
+    ])
     projection = {
-        "schema_version": 2,
+        "schema_version": 3,
         "date": date,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "run": {
             "slot": slot,
+            "perspective": perspective,
             "source": source,
             "generated_at": datetime.now().isoformat(timespec="seconds"),
-            "record_ids": [
-                _text(record.get("id")) for record in public_records if _text(record.get("id"))
-            ],
+            "record_ids": [_text(item.get("id")) for item in ranking if _text(item.get("id"))],
+            "ranking": ranking,
             "summary": {},
         },
         "records": public_records,

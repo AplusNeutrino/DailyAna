@@ -75,14 +75,16 @@ def test_display_title_normalization_is_lossless():
 
 def test_scoring_weights_are_effective(intelligence_config, monkeypatch):
     relevance = deepcopy(intelligence_config)
-    relevance["rules"]["scoring"]["weights"] = {
-        "relevance": 1.0, "source_quality": 0.0, "multi_source": 0.0, "novelty": 0.0, "impact": 0.0,
+    relevance["rules"]["scoring"]["profiles"]["A"]["weights"] = {
+        "relevance": 1.0, "source_quality": 0.0, "evidence": 0.0, "impact": 0.0,
+        "novelty": 0.0, "recency": 0.0, "momentum": 0.0, "actionability": 0.0,
     }
     quality = deepcopy(intelligence_config)
-    quality["rules"]["scoring"]["weights"] = {
-        "relevance": 0.0, "source_quality": 1.0, "multi_source": 0.0, "novelty": 0.0, "impact": 0.0,
+    quality["rules"]["scoring"]["profiles"]["A"]["weights"] = {
+        "relevance": 0.0, "source_quality": 1.0, "evidence": 0.0, "impact": 0.0,
+        "novelty": 0.0, "recency": 0.0, "momentum": 0.0, "actionability": 0.0,
     }
-    row = {"title": "OpenAI GPT 发布新模型", "source_id": "weibo", "source_type": "hotlist"}
+    row = {"title": "OpenAI GPT 发布新模型", "url": "https://example.com/model", "source_id": "unknown"}
     assert build(relevance, monkeypatch, row)["raw_items"][0]["raw_item_score"] > build(quality, monkeypatch, row)["raw_items"][0]["raw_item_score"]
 
 
@@ -382,11 +384,19 @@ def test_public_projection_includes_sanitized_run_summary(intelligence_config, m
     digest = build_digest_summary(package, valid_ai_digest(package), config)
     render_wechat_intelligence_messages(package, digest, config)
     projection = build_public_projection(package)
-    assert projection["schema_version"] == 2
+    assert projection["schema_version"] == 3
     assert projection["run"]["slot"] == "B"
+    assert projection["run"]["perspective"] == "B"
     assert projection["run"]["summary"]["status"] == "ai"
     assert len(projection["run"]["summary"]["top_items"]) == 3
     assert set(projection["run"]["record_ids"]) == {record["id"] for record in projection["records"]}
+    assert projection["run"]["record_ids"] == [item["id"] for item in projection["run"]["ranking"]]
+    assert all(len(item["reasons"]) == 2 for item in projection["run"]["ranking"])
+    ranked_news = [
+        item["id"] for item in projection["run"]["ranking"]
+        if item["id"].startswith("r_")
+    ]
+    assert ranked_news == [item["id"] for item in package["raw_items"]]
     assert "raw_response" not in str(projection)
 
 

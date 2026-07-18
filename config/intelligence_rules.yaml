@@ -63,21 +63,58 @@ intents:
   RISK: [事故, 处罚, 监管, 风险, 召回, 造谣, 刑案, 下架, 封禁, 漏洞]
 
 source_quality:
-  default: 62
-  rss_default: 76
+  default: 60
+  rss_default: 75
+  source_type_scores:
+    official: 95
+    academic: 95
+    professional: 85
+    curated: 75
+    rss: 75
+    community: 62
+    hotlist: 58
+    social: 48
+    individual: 48
   sources:
-    hacker-news: 92
-    ruanyifeng: 88
+    hacker-news: 68
+    hacker-news-best: 68
+    hacker-news-bestcomments: 65
+    hacker-news-ask: 65
+    hacker-news-show: 68
+    ruanyifeng: 80
     yahoo-finance: 86
-    wallstreetcn-hot: 82
-    cls-hot: 82
+    wallstreetcn: 84
+    wallstreetcn-hot: 84
+    cls: 84
+    cls-hot: 84
+    xinhua: 92
+    cctv: 92
+    thepaper: 86
+    ifeng: 68
+    zhihu: 60
+    baidu: 58
+    toutiao: 58
+    bilibili-hot-search: 52
+    tieba: 48
+    weibo: 48
+    douyin: 48
+  domains:
+    arxiv.org: 95
+    nature.com: 94
+    science.org: 94
+    gov.cn: 95
+    github.com: 82
+    openai.com: 90
+    anthropic.com: 90
+    deepseek.com: 90
+    finance.yahoo.com: 86
   patterns:
     - contains: [hacker, github, verge, arxiv, tech, developer, ruanyifeng, 阮一峰]
       score: 88
     - contains: [finance, wallstreet, cls, 财联社, 华尔街, yahoo]
       score: 84
-  social_sources: [weibo, douyin, tieba, zhihu, bilibili-hot-search, toutiao, baidu]
-  social_score: 52
+  social_sources: [weibo, douyin, tieba, bilibili-hot-search]
+  social_score: 48
 
 publisher_aliases:
   wallstreetcn: [wallstreetcn-hot, 华尔街见闻]
@@ -86,24 +123,58 @@ publisher_aliases:
   cctv: [cctv, 央视新闻, 央视网]
 
 scoring:
-  weights:
-    relevance: 0.30
-    source_quality: 0.20
-    multi_source: 0.20
-    novelty: 0.15
-    impact: 0.15
-  relevance:
-    ai_models: 95
-    chips_compute: 92
-    autonomous_robotics: 88
-    developer_open_source: 84
-    new_energy: 76
-    macro_finance: 72
-    domestic_policy: 58
-    culture: 35
-    other: 35
-  impact_intents: [MARKET, POLICY, RISK]
-  noise_penalty: 18
+  version: 2
+  slot_profiles:
+    A: A
+    DIGEST: A
+    B: B
+    C: C
+  profiles:
+    A:
+      weights: {relevance: 0.26, source_quality: 0.22, evidence: 0.13, impact: 0.13, novelty: 0.08, recency: 0.05, momentum: 0.03, actionability: 0.10}
+      category_base: {ai_models: 100, chips_compute: 98, autonomous_robotics: 90, new_energy: 75, developer_open_source: 90, macro_finance: 70, domestic_policy: 60, culture: 30, other: 40}
+      keywords:
+        core: [AI, 大模型, 模型, 芯片, 算力, 半导体, 机器人, 自动驾驶, 开源, 论文, 学术, 科研, API, 开发者, 数据库, 职场, 公务员]
+        secondary: [新能源, 储能, 航天, 量子, 通信, 生产力, 财报, 订单]
+        exclude: [明星八卦, 饭圈, 抽奖]
+      impact_keywords:
+        high: [发布, 开源, 监管, 漏洞, 召回, 量产, 订单, 突破, 禁令]
+        medium: [融资, 涨价, 降价, 更新, 测试, 评测, 迁移]
+        broad: [行业, 供应链, 企业, 开发者, 研究]
+      action_keywords: [发布, 开源, 上线, API, 价格, 订单, 截止, 申请, 招标, 生效, 漏洞, 修复, 迁移, 版本]
+    B:
+      weights: {relevance: 0.18, source_quality: 0.23, evidence: 0.18, impact: 0.21, novelty: 0.08, recency: 0.05, momentum: 0.04, actionability: 0.03}
+      category_base: {ai_models: 70, chips_compute: 70, autonomous_robotics: 65, new_energy: 85, developer_open_source: 45, macro_finance: 100, domestic_policy: 95, culture: 55, other: 50}
+      keywords:
+        core: [政策, 监管, 财经, 宏观, 地缘, 外交, 市场, 社会, 公共安全, 医疗, 教育, 民生, 美联储, 通胀]
+        secondary: [AI, 芯片, 新能源, 汽车, 房地产, 消费, 公司, 财报]
+        exclude: [明星八卦, 游戏攻略, 同人]
+      impact_keywords:
+        high: [政策, 监管, 战争, 制裁, 事故, 召回, 降息, 加息, 处罚, 法规]
+        medium: [财报, 融资, 并购, 涨价, 降价, 调查, 选举, 谈判]
+        broad: [全国, 全球, 市场, 行业, 消费者, 企业]
+      action_keywords: [生效, 实施, 截止, 发布, 调查, 召回, 处罚, 投票, 开售]
+    C:
+      weights: {relevance: 0.27, source_quality: 0.16, evidence: 0.09, impact: 0.10, novelty: 0.14, recency: 0.08, momentum: 0.12, actionability: 0.04}
+      category_base: {ai_models: 55, chips_compute: 35, autonomous_robotics: 50, new_energy: 35, developer_open_source: 30, macro_finance: 35, domestic_policy: 55, culture: 100, other: 60}
+      keywords:
+        core: [游戏, 电影, 影视, 动画, 漫画, 体育, 足球, 篮球, 音乐, 演唱会, 主播, 数码, 评测, 生活, FF14]
+        secondary: [手机, 电脑, 相机, 汽车, 旅行, 美食, 校园, 社区]
+        exclude: [招聘公告, 求职内推, 政策全文]
+      impact_keywords:
+        high: [定档, 上线, 发售, 冠军, 夺冠, 停服, 下架, 召回]
+        medium: [更新, 预告, 评测, 票房, 流水, 赛事, 新品]
+        broad: [玩家, 用户, 观众, 消费者, 平台]
+      action_keywords: [上线, 发售, 开售, 定档, 更新, 预约, 报名, 直播, 比赛, 截止]
+  penalties:
+    noise: 18
+    generic: 12
+    rumor: 15
+    rumor_cap: 70
+    single_social_cap: 65
+    unknown_no_url_cap: 60
+    generic_terms: [震惊, 重磅来袭, 速看, 你绝对想不到, 值得关注, 引发热议]
+    rumor_terms: [网传, 疑似, 曝料, 爆料, 据传, 传闻]
 
 clustering:
   title_bigram_similarity: 0.55

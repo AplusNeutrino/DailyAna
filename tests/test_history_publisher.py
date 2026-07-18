@@ -135,9 +135,14 @@ def test_daily_shard_preserves_strict_run_summary():
     record = public_record()
     run = validate_run({
         "slot": "A",
+        "perspective": "A",
         "source": "ravenis",
         "generated_at": "2026-07-15T06:00:00",
         "record_ids": [record["id"]],
+        "ranking": [{
+            "id": record["id"], "score": 91,
+            "reasons": ["A 核心主题：AI / 模型", "高可信专业来源"],
+        }],
         "summary": {
             "status": "ai",
             "overview": "今天先看模型发布。",
@@ -153,8 +158,15 @@ def test_daily_shard_preserves_strict_run_summary():
     shard = json.loads((output / "days" / "2026-07-15.json").read_text(encoding="utf-8"))
     search = json.loads((output / "search-index.json").read_text(encoding="utf-8"))
     assert shard["runs"][0]["slot"] == "A"
+    assert shard["runs"][0]["perspective"] == "A"
+    assert shard["runs"][0]["record_ids"] == [record["id"]]
+    assert shard["runs"][0]["ranking"][0]["score"] == 91
     assert shard["runs"][0]["summary"]["top_items"][0]["id"] == record["id"]
     assert search["items"][0]["slots"] == ["A"]
+    assert search["items"][0]["perspectives"]["A"]["score"] == 91
+    assert search["items"][0]["perspectives"]["A"]["reasons"] == [
+        "A 核心主题：AI / 模型", "高可信专业来源",
+    ]
 
 
 def test_public_run_summary_rejects_unknown_evidence():
